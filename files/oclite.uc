@@ -44,10 +44,12 @@ function tail(text, lines) {
 	return join('\n', slice(all, -lines));
 }
 
-// runs a CLI command detached, appending "exit=<code>" to its log when it ends
-function background(args, log) {
+// runs a CLI command detached, appending "exit=<code>" to its log when it ends;
+// `on_success` is a shell command run only when it succeeded
+function background(args, log, on_success) {
 	system('mkdir -p ' + RUN_DIR);
-	system(`(${BIN} ${args} > ${log} 2>&1; echo "exit=$?" >> ${log}) >/dev/null 2>&1 &`);
+	const after = on_success ? `; [ $c = 0 ] && ${on_success}` : '';
+	system(`(${BIN} ${args} > ${log} 2>&1; c=$?; echo "exit=$c" >> ${log}${after}) >/dev/null 2>&1 &`);
 }
 
 function busy(log) {
@@ -130,7 +132,8 @@ const methods = {
 	},
 	update_self: {
 		call: function() {
-			background('self-update', SELF_LOG);
+			// the downloaded ipks stay in /tmp after a failure, for a manual `opkg install`
+			background('self-update', SELF_LOG, 'rm -rf /tmp/openwrt-clash-lite-update');
 			return { ok: true, message: 'started; follow it with log {"name":"self"}' };
 		}
 	},
