@@ -23,6 +23,8 @@ pub struct Profile {
     pub id: String,
     pub name: String,
     pub url: String,
+    /// User-Agent for downloading; empty means the default (`xctcc`).
+    pub ua: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -84,6 +86,7 @@ fn from_sections(sections: &[Section]) -> Res<State> {
                 id: id.to_string(),
                 name: s.get("name").unwrap_or(id).to_string(),
                 url: s.get("url").unwrap_or_default().to_string(),
+                ua: s.get("ua").unwrap_or_default().to_string(),
             }),
             _ => {}
         }
@@ -106,10 +109,16 @@ fn to_sections(state: &State) -> Vec<Section> {
         name: Some("main".into()),
         options: main,
     }];
-    sections.extend(state.profiles.iter().map(|p| Section {
-        kind: "subscription".into(),
-        name: Some(p.id.clone()),
-        options: vec![opt("name", &p.name), opt("url", &p.url)],
+    sections.extend(state.profiles.iter().map(|p| {
+        let mut options = vec![opt("name", &p.name), opt("url", &p.url)];
+        if !p.ua.is_empty() {
+            options.push(opt("ua", &p.ua));
+        }
+        Section {
+            kind: "subscription".into(),
+            name: Some(p.id.clone()),
+            options,
+        }
     }));
     sections
 }
@@ -188,6 +197,7 @@ mod tests {
             id: "R1".into(),
             name: "it's mine".into(),
             url: "https://x/y?a=1&b=2".into(),
+            ua: "clash-verge/v2.2.3".into(),
         });
         s.active = Some("R1".into());
         s.port = 9999;
@@ -212,6 +222,7 @@ mod tests {
             id: "R1".into(),
             name: "n".into(),
             url: "u".into(),
+            ua: String::new(),
         });
         s.active = Some("R1".into());
         s.save(&paths).unwrap();

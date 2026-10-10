@@ -1,9 +1,10 @@
-//! Subscription download and validation (same rules as the Windows clash-lite, UA fixed to `xctcc`).
+//! Subscription download and validation (same rules as the Windows clash-lite). The User-Agent
+//! is `xctcc` unless a subscription sets its own.
 use crate::state::Res;
 use std::time::Duration;
 use ureq::Agent;
 
-const USER_AGENT: &str = "xctcc";
+pub const DEFAULT_USER_AGENT: &str = "xctcc";
 const MAX_BODY: u64 = 32 * 1024 * 1024;
 
 pub struct Fetched {
@@ -77,10 +78,18 @@ pub fn validate(body: &str) -> Res<()> {
     }
 }
 
-pub fn fetch(url: &str) -> Res<Fetched> {
+/// The User-Agent to send: the subscription's own, or the default when it has none.
+pub fn user_agent(ua: &str) -> &str {
+    match ua.trim() {
+        "" => DEFAULT_USER_AGENT,
+        own => own,
+    }
+}
+
+pub fn fetch(url: &str, ua: &str) -> Res<Fetched> {
     let url = fix_dirty_url(url.trim());
     let agent: Agent = Agent::config_builder()
-        .user_agent(USER_AGENT)
+        .user_agent(user_agent(ua))
         .timeout_global(Some(Duration::from_secs(20)))
         .build()
         .into();
@@ -135,6 +144,13 @@ mod tests {
             host_of("https://sub.example.com/api/v1?token=x"),
             "sub.example.com"
         );
+    }
+
+    #[test]
+    fn an_empty_user_agent_means_the_default() {
+        assert_eq!(user_agent(""), "xctcc");
+        assert_eq!(user_agent("  "), "xctcc");
+        assert_eq!(user_agent(" clash-verge/v2.2.3 "), "clash-verge/v2.2.3");
     }
 
     #[test]

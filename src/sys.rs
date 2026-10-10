@@ -87,6 +87,11 @@ mod imp {
         }
         Some(st.f_bavail as u64 * st.f_frsize as u64)
     }
+
+    /// Replaces this process with `program`; returns only if that failed.
+    pub fn exec(program: &str, args: &[&str]) -> std::io::Error {
+        Command::new(program).args(args).exec()
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -111,11 +116,14 @@ mod imp {
     pub fn free_bytes(_path: &Path) -> Option<u64> {
         None
     }
+    pub fn exec(_program: &str, _args: &[&str]) -> std::io::Error {
+        std::io::Error::other("exec is only supported on Linux")
+    }
 }
 
 pub use imp::{
-    die_with_parent, free_bytes, link_file, list_procs, make_executable, restrict_file, rss_kb,
-    terminate,
+    die_with_parent, exec, free_bytes, link_file, list_procs, make_executable, restrict_file,
+    rss_kb, terminate,
 };
 
 /// Resident memory in kB from the text of `/proc/<pid>/status` (`VmRSS:   12345 kB`).

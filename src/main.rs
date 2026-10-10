@@ -4,6 +4,7 @@ mod cron;
 mod geo;
 mod merge;
 mod mihomo;
+mod selfupdate;
 mod state;
 mod subscription;
 mod supervisor;
@@ -23,9 +24,9 @@ use subscription::Fetched;
 
 const USAGE: &str = "openwrt-clash-lite <command>
   run              run mihomo with transparent takeover (foreground, used by procd)
-  add <url>        download a subscription; it becomes active if none is
+  add <url> [ua]   download a subscription (User-Agent ua, default xctcc); active if none is
   update [id]      re-download the active (or the given) subscription
-  edit <id> <name> <url>  rename a subscription or change its URL (a new URL is downloaded first)
+  edit <id> <name> <url> [ua]  change name, URL or User-Agent (a new URL/UA is downloaded first)
   use <id>         make a subscription active (restart the service to apply)
   remove <id>      delete a subscription
   list [--json]    list subscriptions
@@ -33,6 +34,7 @@ const USAGE: &str = "openwrt-clash-lite <command>
   update-core      install the latest mihomo release for this CPU
   auto-update      daily job: update the active subscription, restart only if it changed
   sync-cron        write or remove the daily job in root's crontab (UCI auto_update)
+  self-update      install the latest openwrt-clash-lite release with opkg
   version";
 
 fn new_id() -> String {
@@ -52,28 +54,35 @@ fn write_profile(paths: &Paths, id: &str, body: &str) -> Res<()> {
 
 /// Saves a downloaded subscription under `id`, registers it, and activates it if nothing is active.
 /// A known subscription keeps its name (the user may have edited it).
-fn store(paths: &Paths, state: &mut State, id: &str, url: &str, fetched: &Fetched) -> Res<()> {
+fn store(
+    paths: &Paths,
+    state: &mut State,
+    id: &str,
+    (url, ua): (&str, &str),
+    fetched: &Fetched,
+) -> Res<()> {
     write_profile(paths, id, &fetched.body)?;
     if !state.profiles.iter().any(|p| p.id == id) {
         state.profiles.push(Profile {
             id: id.to_string(),
             name: fetched.name.clone(),
             url: url.to_string(),
+            ua: ua.trim().to_string(),
         });
     }
     state.active.get_or_insert_with(|| id.to_string());
     state.save(paths)
 }
 
-fn cmd_add(paths: &Paths, url: &str) -> Res<()> {
-    let fetched = subscription::fetch(url)?;
+fn cmd_add(paths: &Paths, url: &str, ua: &str) -> Res<()> {
+    let fetched = subscription::fetch(url, ua)?;
     let mut state = State::load(paths)?;
     let id = state
         .profiles
         .iter()
         .find(|p| p.url == url)
         .map_or_else(new_id, |p| p.id.clone());
-    store(paths, &mut state, &id, url, &fetched)?;
+    store(paths, &mut state, &id, (url, ua), &fetched)?;
     println!("saved \"{}\" as {id}", fetched.name);
     Ok(())
 }
@@ -92,22 +101,24 @@ fn cmd_update(paths: &Paths, id: Option<&str>) -> Res<()> {
         .map(str::to_string)
         .or_else(|| state.active.clone())
         .ok_or("no subscription yet")?;
-    let url = find(&state, &id)?.url.clone();
-    store(paths, &mut state, &id, &url, &subscription::fetch(&url)?)?;
+    let p = find(&state, &id)?.clone();
+    let fetched = subscription::fetch(&p.url, &p.ua)?;
+    store(paths, &mut state, &id, (&p.url, &p.ua), &fetched)?;
     println!("updated {id}; restart the service to apply");
     Ok(())
 }
 
-/// Renames a subscription and/or changes its URL. A new URL is downloaded first, so a bad one
-/// changes nothing.
-fn cmd_edit(paths: &Paths, id: &str, name: &str, url: &str) -> Res<()> {
+/// Changes name, URL and User-Agent. A new URL or UA is tried with a download first, so a bad
+/// one changes nothing.
+fn cmd_edit(paths: &Paths, id: &str, name: &str, url: &str, ua: &str) -> Res<()> {
     let mut state = State::load(paths)?;
-    let name = name.trim();
+    let (name, ua) = (name.trim(), ua.trim());
     if name.is_empty() {
         return Err("name must not be empty".into());
     }
-    if find(&state, id)?.url != url {
-        let fetched = subscription::fetch(url)?;
+    let old = find(&state, id)?;
+    if old.url != url || old.ua != ua {
+        let fetched = subscription::fetch(url, ua)?;
         write_profile(paths, id, &fetched.body)?;
     }
     let p = state
@@ -117,6 +128,7 @@ fn cmd_edit(paths: &Paths, id: &str, name: &str, url: &str) -> Res<()> {
         .ok_or(format!("unknown subscription {id}"))?;
     p.name = name.to_string();
     p.url = url.to_string();
+    p.ua = ua.to_string();
     state.save(paths)?;
     println!("saved {id}");
     Ok(())
@@ -129,9 +141,9 @@ fn cmd_auto_update(paths: &Paths) -> Res<()> {
         .active_profile()
         .ok_or("no active subscription")?
         .clone();
-    let fetched = subscription::fetch(&p.url)?;
+    let fetched = subscription::fetch(&p.url, &p.ua)?;
     let unchanged = fs::read_to_string(paths.profile(&p.id)).is_ok_and(|old| old == fetched.body);
-    store(paths, &mut state, &p.id, &p.url, &fetched)?;
+    store(paths, &mut state, &p.id, (&p.url, &p.ua), &fetched)?;
     if unchanged {
         println!("{} unchanged", p.id);
         return Ok(());
@@ -192,7 +204,7 @@ fn list_json(paths: &Paths, state: &State) -> Value {
         .iter()
         .map(|p| {
             json!({
-                "id": p.id, "name": p.name, "url": p.url,
+                "id": p.id, "name": p.name, "url": p.url, "ua": p.ua,
                 "updated": paths.profile_updated(&p.id),
                 "active": state.active.as_deref() == Some(p.id.as_str()),
             })
@@ -224,6 +236,7 @@ fn status_json(paths: &Paths, state: &State) -> Value {
     let pid = fs::read_to_string(paths.pid_file()).ok();
     let memory_kb = pid.and_then(|p| sys::rss_kb(p.trim().parse().ok()?));
     json!({
+        "app_version": env!("CARGO_PKG_VERSION"),
         "running": version.is_some(),
         "version": version,
         "tun": version.is_some() && api::tun_enabled(&ctl, secret).unwrap_or(false),
@@ -262,6 +275,11 @@ fn cmd_update_core(paths: &Paths) -> Res<()> {
     Ok(())
 }
 
+fn cmd_self_update() -> Res<()> {
+    println!("{}", selfupdate::run()?);
+    Ok(())
+}
+
 fn cmd_version() -> Res<()> {
     println!("openwrt-clash-lite {}", env!("CARGO_PKG_VERSION"));
     Ok(())
@@ -272,11 +290,17 @@ fn dispatch(args: &[String], paths: &Paths) -> Res<()> {
     let json = arg(1) == Some("--json");
     match arg(0) {
         Some("run") => supervisor::run(paths),
-        Some("add") => cmd_add(paths, arg(1).ok_or("usage: add <url>")?),
+        Some("add") => cmd_add(
+            paths,
+            arg(1).ok_or("usage: add <url> [ua]")?,
+            arg(2).unwrap_or(""),
+        ),
         Some("update") => cmd_update(paths, arg(1)),
         Some("edit") => match (arg(1), arg(2), arg(3)) {
-            (Some(id), Some(name), Some(url)) => cmd_edit(paths, id, name, url),
-            _ => Err("usage: edit <id> <name> <url>".into()),
+            (Some(id), Some(name), Some(url)) => {
+                cmd_edit(paths, id, name, url, arg(4).unwrap_or(""))
+            }
+            _ => Err("usage: edit <id> <name> <url> [ua]".into()),
         },
         Some("use") => cmd_use(paths, arg(1).ok_or("usage: use <id>")?),
         Some("remove") => cmd_remove(paths, arg(1).ok_or("usage: remove <id>")?),
@@ -285,6 +309,7 @@ fn dispatch(args: &[String], paths: &Paths) -> Res<()> {
         Some("update-core") => cmd_update_core(paths),
         Some("auto-update") => cmd_auto_update(paths),
         Some("sync-cron") => cmd_sync_cron(paths),
+        Some("self-update") => cmd_self_update(),
         Some("version") => cmd_version(),
         _ => Err(USAGE.into()),
     }
@@ -323,8 +348,8 @@ mod tests {
 
     fn two_profiles(paths: &Paths) -> State {
         let mut state = State::load(paths).unwrap();
-        store(paths, &mut state, "R1", "http://a", &fetched("A")).unwrap();
-        store(paths, &mut state, "R2", "http://b", &fetched("B")).unwrap();
+        store(paths, &mut state, "R1", ("http://a", ""), &fetched("A")).unwrap();
+        store(paths, &mut state, "R2", ("http://b", ""), &fetched("B")).unwrap();
         state
     }
 
@@ -350,8 +375,8 @@ mod tests {
     fn storing_the_same_id_again_updates_the_file_but_keeps_the_name() {
         let paths = temp_paths("update");
         let mut state = State::load(&paths).unwrap();
-        store(&paths, &mut state, "R1", "http://a", &fetched("old")).unwrap();
-        store(&paths, &mut state, "R1", "http://a", &fetched("new")).unwrap();
+        store(&paths, &mut state, "R1", ("http://a", ""), &fetched("old")).unwrap();
+        store(&paths, &mut state, "R1", ("http://a", ""), &fetched("new")).unwrap();
         assert_eq!(state.profiles.len(), 1);
         assert_eq!(
             state.profiles[0].name, "old",
@@ -369,15 +394,15 @@ mod tests {
     fn editing_the_name_only_needs_no_download() {
         let paths = temp_paths("editname");
         two_profiles(&paths);
-        cmd_edit(&paths, "R1", "  我的机场  ", "http://a").unwrap();
+        cmd_edit(&paths, "R1", "  我的机场  ", "http://a", "").unwrap();
         let state = State::load(&paths).unwrap();
         assert_eq!(state.profiles[0].name, "我的机场");
         assert_eq!(state.profiles[0].url, "http://a");
         assert!(
-            cmd_edit(&paths, "R1", "  ", "http://a").is_err(),
+            cmd_edit(&paths, "R1", "  ", "http://a", "").is_err(),
             "empty name"
         );
-        assert!(cmd_edit(&paths, "nope", "x", "http://a").is_err());
+        assert!(cmd_edit(&paths, "nope", "x", "http://a", "").is_err());
         cleanup(&paths);
     }
 
@@ -386,7 +411,7 @@ mod tests {
         let paths = temp_paths("editurl");
         two_profiles(&paths);
         // nothing listens on port 1, so the download fails for real
-        assert!(cmd_edit(&paths, "R1", "renamed", "http://127.0.0.1:1/sub").is_err());
+        assert!(cmd_edit(&paths, "R1", "renamed", "http://127.0.0.1:1/sub", "").is_err());
         let state = State::load(&paths).unwrap();
         assert_eq!(
             (
@@ -399,6 +424,32 @@ mod tests {
             fs::read_to_string(paths.profile("R1"))
                 .unwrap()
                 .contains("# A")
+        );
+        cleanup(&paths);
+    }
+
+    #[test]
+    fn a_new_user_agent_is_tried_first_and_a_failure_changes_nothing() {
+        let paths = temp_paths("editua");
+        two_profiles(&paths);
+        // same URL with another UA forces a download; nothing listens there, so it fails for real
+        let mut state = State::load(&paths).unwrap();
+        state.profiles[0].url = "http://127.0.0.1:1/sub".into();
+        state.save(&paths).unwrap();
+        assert!(
+            cmd_edit(
+                &paths,
+                "R1",
+                "A",
+                "http://127.0.0.1:1/sub",
+                "clash-verge/v2"
+            )
+            .is_err()
+        );
+        assert_eq!(
+            State::load(&paths).unwrap().profiles[0].ua,
+            "",
+            "UA unchanged"
         );
         cleanup(&paths);
     }

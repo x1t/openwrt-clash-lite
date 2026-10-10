@@ -12,12 +12,13 @@ const oclite = (method, params) => rpc.declare({
 const callStatus = oclite('status');
 const callList = oclite('list');
 const callAdd = oclite('add', [ 'url' ]);
-const callEdit = oclite('edit', [ 'id', 'name', 'url' ]);
+const callEdit = oclite('edit', [ 'id', 'name', 'url', 'ua' ]);
 const callUpdate = oclite('update', [ 'id' ]);
 const callUse = oclite('use', [ 'id' ]);
 const callRemove = oclite('remove', [ 'id' ]);
 const callService = oclite('service', [ 'action' ]);
 const callUpdateCore = oclite('update_core');
+const callUpdateSelf = oclite('update_self');
 const callLog = oclite('log', [ 'name', 'lines' ]);
 const callRcInit = rpc.declare({
 	object: 'rc', method: 'init', params: [ 'name', 'action' ], expect: { '': {} }
@@ -63,6 +64,7 @@ function refreshStatus() {
 		if (light) light.style.color = color;
 		set('oclite-state', text);
 		set('oclite-version', s.version || '-');
+		set('oclite-app', s.app_version || '-');
 		set('oclite-memory', s.memory_kb ? '%.1f MB'.format(s.memory_kb / 1024) : '-');
 		set('oclite-active', s.active ? s.active.name : _('无（请先添加订阅）'));
 		set('oclite-core', s.core || _('未找到 mihomo，请点「更新内核」'));
@@ -72,16 +74,43 @@ function refreshStatus() {
 	});
 }
 
-function waitCoreUpdate() {
+/* polls a background job's log until it ends; calls may fail meanwhile (rpcd restarting during
+ * an upgrade), which only means "ask again". Resolves null after `seconds`. */
+function waitLog(name, seconds) {
+	const until = Date.now() + seconds * 1000;
 	return new Promise(function(resolve) {
 		const tick = function() {
-			callLog('core', 20).then(function(r) {
-				if ((r.log || '').indexOf('exit=') < 0)
-					return window.setTimeout(tick, 2000);
-				resolve(r.log);
+			L.resolveDefault(callLog(name, 20), {}).then(function(r) {
+				const log = r.log || '';
+				if (log.indexOf('exit=') >= 0)
+					return resolve(log);
+				if (Date.now() > until)
+					return resolve(null);
+				window.setTimeout(tick, 2000);
 			});
 		};
 		tick();
+	});
+}
+
+function waitCoreUpdate() {
+	return waitLog('core', 600);
+}
+
+function updateSelf() {
+	ui.showModal(_('更新 Clash Lite'), [
+		E('p', { 'class': 'spinning' }, _('正在检查 GitHub 上的最新版本，有新版本会自动下载并安装，服务会重启一下，请不要关闭页面…')) ]);
+	return callUpdateSelf().then(() => waitLog('self', 300)).then(function(log) {
+		ui.hideModal();
+		if (log === null)
+			return ui.addNotification(null, E('p', _('还没有结果，请稍后刷新页面查看版本号。')), 'warning');
+		if (log.indexOf('already up to date') >= 0)
+			return ui.addNotification(null, E('p', _('已是最新版本：') + (status.app_version || '')), 'info');
+		if (log.indexOf('exit=0') >= 0) {
+			ui.addNotification(null, E('p', _('更新完成，页面马上刷新。')), 'info');
+			return window.setTimeout(() => window.location.reload(), 2000);
+		}
+		ui.addNotification(null, E('pre', log.replace(/\nexit=\d+$/, '')), 'danger');
 	});
 }
 
@@ -124,6 +153,7 @@ function renderStatus() {
 		]),
 		E('table', { 'class': 'table' }, [
 			row(_('状态'), 'oclite-state'),
+			row(_('Clash Lite 版本'), 'oclite-app'),
 			row(_('mihomo 版本'), 'oclite-version'),
 			row(_('内存占用'), 'oclite-memory'),
 			row(_('当前订阅'), 'oclite-active'),
@@ -140,7 +170,8 @@ function renderStatus() {
 					return ui.addNotification(null, E('p', _('请先启动服务')), 'warning');
 				window.open(yacdUrl(status), '_blank');
 			}), ' ',
-			button(_('更新内核'), 'neutral', updateCore)
+			button(_('更新内核'), 'neutral', updateCore), ' ',
+			button(_('更新 Clash Lite'), 'neutral', updateSelf)
 		])
 	]);
 }
@@ -149,23 +180,28 @@ function editDialog(sub, reload) {
 	const field = (value) => E('input', { 'type': 'text', 'class': 'cbi-input-text', 'style': 'width:100%', 'value': value });
 	const name = field(sub.name);
 	const url = field(sub.url);
+	const ua = field(sub.ua || '');
+	ua.placeholder = _('留空使用默认：xctcc');
 	const error = E('p', { 'class': 'alert-message danger', 'style': 'display:none' });
 	const save = function() {
 		const newUrl = url.value.trim();
-		return callEdit(sub.id, name.value, newUrl).then(function(r) {
+		const newUa = ua.value.trim();
+		return callEdit(sub.id, name.value, newUrl, newUa).then(function(r) {
 			if (r && r.ok === false) {
 				error.textContent = r.message || _('保存失败');
 				error.style.display = '';
 				return;
 			}
 			ui.hideModal();
-			const restart = sub.active && newUrl !== sub.url ? applyIfRunning() : Promise.resolve();
+			const changed = newUrl !== sub.url || newUa !== (sub.ua || '');
+			const restart = sub.active && changed ? applyIfRunning() : Promise.resolve();
 			return restart.then(reload);
 		});
 	};
 	ui.showModal(_('编辑订阅'), [
 		E('p', _('名称')), name,
 		E('p', _('订阅链接（修改后会先下载验证，下载失败则不做任何改动）')), url,
+		E('p', _('User-Agent（下载订阅时使用；修改后同样会先下载验证）')), ua,
 		error,
 		E('div', { 'class': 'right', 'style': 'margin-top:1em' }, [
 			E('button', { 'class': 'cbi-button', 'click': ui.hideModal }, _('取消')), ' ',

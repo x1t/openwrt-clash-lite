@@ -61,7 +61,9 @@ core_package() {
 	local d=$WORK/core
 	install -Dm755 "$BINARY" "$d/data/usr/bin/openwrt-clash-lite"
 	install -Dm755 "$ROOT/files/openwrt-clash-lite.init" "$d/data/etc/init.d/openwrt-clash-lite"
-	install -Dm644 "$ROOT/files/oclite.uc" "$d/data/usr/share/rpcd/ucode/oclite"
+	mkdir -p "$d/data/usr/share/rpcd/ucode"
+	sed "s/@VERSION@/$VERSION/" "$ROOT/files/oclite.uc" > "$d/data/usr/share/rpcd/ucode/oclite"
+	chmod 644 "$d/data/usr/share/rpcd/ucode/oclite"
 	mkdir -p "$d/data/usr/share/openwrt-clash-lite/ui"
 	unzip -q "$ROOT/assets/yacd.zip" -d "$d/data/usr/share/openwrt-clash-lite/ui" -x CNAME _headers
 	# zip entries may carry 0666; nothing under /usr/share should be world-writable
