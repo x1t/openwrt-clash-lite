@@ -17,7 +17,12 @@ chmod 600 $CFG
 # which also logs out LuCI sessions, so only restart when the reload was not enough
 /etc/init.d/rpcd reload
 sleep 1
-ubus list oclite >/dev/null 2>&1 || /etc/init.d/rpcd restart
+if ! ubus list oclite >/dev/null 2>&1; then
+	/etc/init.d/rpcd restart
+	# rpcd needs a few seconds after a restart before `oclite` answers
+	i=0
+	while ! ubus list oclite >/dev/null 2>&1 && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
+fi
 # a fresh install never starts by itself (it would fight OpenClash); an upgrade restores the state
 if [ -f /tmp/openwrt-clash-lite.restart ]; then
 	rm -f /tmp/openwrt-clash-lite.restart
