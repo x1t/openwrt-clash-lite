@@ -78,6 +78,10 @@ fn spawn_core(paths: &Paths, bin: &Path) -> Res<Child> {
         .arg(paths.data_dir())
         .arg("-f")
         .arg(paths.runtime_config());
+    // mihomo refuses an external-ui outside its home dir unless the path is in SAFE_PATHS
+    if let Some(ui) = paths.ui_dir() {
+        cmd.env("SAFE_PATHS", ui);
+    }
     cmd.stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);

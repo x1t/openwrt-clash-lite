@@ -1,0 +1,8 @@
+#!/bin/sh
+[ -n "$IPKG_INSTROOT" ] && exit 0
+cpu=$(uname -m)
+if [ "$cpu" != "@UNAME@" ]; then
+	echo "openwrt-clash-lite: this package is built for @UNAME@, but this router is $cpu" >&2
+	exit 1
+fi
+exit 0

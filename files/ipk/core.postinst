@@ -1,0 +1,16 @@
+#!/bin/sh
+[ -n "$IPKG_INSTROOT" ] && exit 0
+CFG=/etc/config/openwrt-clash-lite
+if [ ! -f $CFG ]; then
+	touch $CFG
+	uci set openwrt-clash-lite.main=main
+	uci set openwrt-clash-lite.main.port='19097'
+	uci set openwrt-clash-lite.main.log_level='warning'
+fi
+if [ -z "$(uci -q get openwrt-clash-lite.main.secret)" ]; then
+	uci set openwrt-clash-lite.main.secret="$(head -c 16 /dev/urandom | md5sum | cut -c1-32)"
+fi
+uci commit openwrt-clash-lite
+chmod 600 $CFG
+/etc/init.d/rpcd reload
+exit 0

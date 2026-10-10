@@ -2,6 +2,7 @@
 //! `uci set` and sysupgrade backups work with them like with any other OpenWrt package.
 use crate::{
     config::Paths,
+    sys,
     uci::{self, Section},
 };
 use serde::Serialize;
@@ -128,6 +129,7 @@ impl State {
         }
         let tmp = paths.uci_file.with_extension("tmp");
         fs::write(&tmp, uci::serialize(&to_sections(self)))?;
+        sys::restrict_file(&tmp); // holds the secret and subscription URLs
         fs::rename(tmp, &paths.uci_file)?;
         Ok(())
     }

@@ -1,0 +1,18 @@
+{
+	"luci-app-openwrt-clash-lite": {
+		"description": "Grant access to openwrt-clash-lite",
+		"read": {
+			"uci": [ "openwrt-clash-lite" ],
+			"ubus": {
+				"oclite": [ "status", "list", "log" ]
+			}
+		},
+		"write": {
+			"uci": [ "openwrt-clash-lite" ],
+			"ubus": {
+				"oclite": [ "add", "update", "use", "remove", "service", "update_core" ],
+				"rc": [ "init" ]
+			}
+		}
+	}
+}
