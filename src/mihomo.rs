@@ -8,6 +8,8 @@ use std::{fs, io, path::Path, process::Command, time::Duration};
 use ureq::Agent;
 
 const LATEST: &str = "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest";
+/// Printed instead of downloading; the LuCI page looks for it to skip the restart.
+pub const UP_TO_DATE: &str = "already up to date";
 
 /// mihomo's name for this build's CPU.
 fn arch() -> &'static str {
@@ -113,12 +115,21 @@ fn test_running_config(bin: &Path, paths: &Paths) -> Res<()> {
     Err(format!("the new core rejects the current config, keeping the old one: {last}").into())
 }
 
+/// `mihomo -v` prints e.g. "Mihomo Meta v1.19.32 linux arm64 ..."; alpha builds never match a tag.
+fn is_current(version_line: &str, tag: &str) -> bool {
+    version_line.split_whitespace().any(|w| w == tag)
+}
+
 pub fn update(paths: &Paths) -> Res<String> {
     let release: Value = agent().get(LATEST).call()?.body_mut().read_json()?;
     let asset = pick_asset(&release, arch()).ok_or(format!(
         "no mihomo-linux-{} asset in the latest release",
         arch()
     ))?;
+    let in_use = paths.mihomo_bin().and_then(|b| version_of(&b).ok());
+    if let Some(v) = in_use.filter(|v| is_current(v, &asset.tag)) {
+        return Ok(format!("{UP_TO_DATE}: {v}"));
+    }
     fs::create_dir_all(&paths.dir)?;
     check_space(&paths.dir, asset.gz_size)?;
     let target = paths.own_mihomo();
@@ -169,6 +180,21 @@ mod tests {
             let want = format!("/mihomo-linux-{arch}-v1.19.32.gz");
             assert!(a.url.ends_with(&want), "{}", a.url);
         }
+    }
+
+    #[test]
+    fn the_latest_tag_is_recognised_in_real_version_lines() {
+        let stable = "Mihomo Meta v1.19.32 linux arm64 with go1.26.8 Wed Sep 30 16:55:22 UTC 2026";
+        assert!(is_current(stable, "v1.19.32"));
+        assert!(!is_current(stable, "v1.19.33"));
+        assert!(!is_current(
+            "Mihomo Meta v1.19.13 linux arm64 with go1.24.5",
+            "v1.19.3"
+        ));
+        assert!(!is_current(
+            "Mihomo Meta alpha-ge183c58 linux arm with go1.26.5",
+            "v1.19.32"
+        ));
     }
 
     #[test]

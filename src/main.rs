@@ -202,10 +202,12 @@ fn cmd_status(paths: &Paths, as_json: bool) -> Res<()> {
 }
 
 fn cmd_update_core(paths: &Paths) -> Res<()> {
-    println!(
-        "installed {}; restart the service to use it",
-        mihomo::update(paths)?
-    );
+    let done = mihomo::update(paths)?;
+    if done.starts_with(mihomo::UP_TO_DATE) {
+        println!("{done}");
+    } else {
+        println!("installed {done}; restart the service to use it");
+    }
     Ok(())
 }
 

@@ -90,8 +90,10 @@ function updateCore() {
 	return callUpdateCore().then(waitCoreUpdate).then(function(log) {
 		ui.hideModal();
 		const ok = log.indexOf('exit=0') >= 0;
-		ui.addNotification(null, E('pre', log.replace(/\nexit=\d+$/, '')), ok ? 'info' : 'danger');
-		return ok ? applyIfRunning() : null;
+		const current = log.indexOf('already up to date') >= 0;
+		const text = current ? _('已是最新版本，无需更新：') + log.replace(/^already up to date: /, '') : log;
+		ui.addNotification(null, E('pre', text.replace(/\nexit=\d+$/, '')), ok ? 'info' : 'danger');
+		return ok && !current ? applyIfRunning() : null;
 	});
 }
 
