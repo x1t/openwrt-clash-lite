@@ -2,6 +2,7 @@
 name = "openwrt-clash-lite"
 version = "0.1.3"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 ctrlc = { version = "3.5.2", features = ["termination"] }

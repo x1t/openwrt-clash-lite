@@ -191,3 +191,7 @@ bash scripts/build-ipk.sh 0.1.3 armv7 target/armv7-unknown-linux-musleabihf/rele
 - [MetaCubeX/Yacd-meta](https://github.com/MetaCubeX/Yacd-meta)：面板
 - [vernesong/OpenClash](https://github.com/vernesong/OpenClash)：接管方式和内核更新流程的参考
 - [nikkinikki-org/OpenWrt-nikki](https://github.com/nikkinikki-org/OpenWrt-nikki)：LuCI 页面和 rpcd 插件写法的参考
+
+## 📄 许可证
+
+[MIT](LICENSE)
