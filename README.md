@@ -33,6 +33,7 @@ Clash Lite 让 mihomo 自己用 **TUN 的 `auto-route` + `auto-redirect`** 接�
 - 🚦 **启动不断网**：规则集加载完才打开 TUN，加载期间局域网照常直连；停止或崩溃时 mihomo 自己清掉路由和防火墙规则
 - 🔁 **自动恢复**：mihomo 崩溃后按 2、4、8…30 秒退避重启；守护进程被杀，mihomo 也会跟着退出并清理
 - 🔗 **订阅**：添加、编辑（名称和链接）、更新、切换、删除，下载时 User-Agent 固定为 `xctcc`
+- ⏰ **每天自动更新订阅**：页面上开关、设时间；内容有变化才重启，没变化不断网
 - 📊 **Yacd 面板**：打包在 ipk 里，页面上一键打开并自动登录
 - ⬆️ **更新内核**：一键安装 mihomo 官方最新版，带空间检查和配置检查，失败不影响旧内核（见下文）
 - 🧩 **LuCI 页面**：「服务 → Clash Lite」，状态、启停、开机自启、订阅、设置、日志都在一页
@@ -83,8 +84,11 @@ Clash Lite 让 mihomo 自己用 **TUN 的 `auto-route` + `auto-redirect`** 接�
 2. 「服务 → Clash Lite」点「启动」，再点「开启开机自启」
 
 **换回 OpenClash**
-1. 「服务 → Clash Lite」点「停止」，再点「关闭开机自启」
-2. 「服务 → OpenClash」点「启动 OpenClash」
+1. 如果在「系统 → 启动项」里禁用过 `openclash`，先改回「已启用」
+2. 「服务 → Clash Lite」点「停止」，再点「关闭开机自启」
+3. 「服务 → OpenClash」点「启动 OpenClash」
+
+> 换成 Clash Lite 后，可以在「系统 → 启动项」里禁用 `openclash`：它的开机脚本即使不启动也会空转约 35 秒，禁用后开机能早这么久接管。
 
 命令行：
 
@@ -155,13 +159,29 @@ openwrt-clash-lite remove <id>      删除订阅
 openwrt-clash-lite list [--json]
 openwrt-clash-lite status [--json]
 openwrt-clash-lite update-core      更新 mihomo
+openwrt-clash-lite auto-update      定时任务用：更新当前订阅，有变化才重启
+openwrt-clash-lite sync-cron        按 UCI 写入或删除 crontab 里的定时任务
 ```
+
+## ⏰ 每天自动更新订阅
+
+页面「设置」里打开「每天自动更新订阅」并填时间（默认 06:10），点「保存并应用」即可。也可以用命令：
+
+```sh
+uci set openwrt-clash-lite.main.auto_update='1'
+uci set openwrt-clash-lite.main.update_time='06:10'
+uci commit openwrt-clash-lite
+openwrt-clash-lite sync-cron
+```
+
+程序会在 `/etc/crontabs/root` 里维护一行带 `# openwrt-clash-lite` 标记的任务，你自己的其他定时任务不受影响；卸载时这一行会被删除。到时间后重新下载当前订阅：内容有变化并且服务在运行才重启，没变化什么都不做。
 
 ## 📁 文件
 
 | 路径 | 内容 |
 |---|---|
 | `/etc/config/openwrt-clash-lite` | 设置和订阅列表（UCI，权限 600，卸载时保留） |
+| `/etc/crontabs/root` 里带标记的一行 | 每天自动更新订阅的任务 |
 | `/etc/openwrt-clash-lite/` | 下载的订阅、自己更新的内核、规则集缓存 |
 | `/tmp/openwrt-clash-lite/` | 运行时配置（含节点密码，只在内存里）、mihomo 日志 |
 | `/usr/share/openwrt-clash-lite/ui/` | Yacd 面板 |
@@ -180,7 +200,7 @@ openwrt-clash-lite update-core      更新 mihomo
 cargo test
 cargo zigbuild --release --target armv7-unknown-linux-musleabihf
 cargo zigbuild --release --target aarch64-unknown-linux-musl
-bash scripts/build-ipk.sh 0.1.4 armv7 target/armv7-unknown-linux-musleabihf/release/openwrt-clash-lite dist
+bash scripts/build-ipk.sh 0.1.5 armv7 target/armv7-unknown-linux-musleabihf/release/openwrt-clash-lite dist
 ```
 
 `build-ipk.sh` 要在 Linux（或 WSL）上运行，Windows 文件系统存不了可执行权限。推送 `v*` 标签后，GitHub Actions 会自动编译并发布全部 ipk。

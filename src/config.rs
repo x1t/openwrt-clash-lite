@@ -3,6 +3,7 @@ use std::{env, fs, path::PathBuf, time::UNIX_EPOCH};
 const DEFAULT_DIR: &str = "/etc/openwrt-clash-lite";
 const DEFAULT_RUN_DIR: &str = "/tmp/openwrt-clash-lite";
 const DEFAULT_UCI: &str = "/etc/config/openwrt-clash-lite";
+const DEFAULT_CRONTAB: &str = "/etc/crontabs/root";
 /// Yacd as installed by the ipk (read-only); `<dir>/ui` is checked first so it can be replaced.
 const PACKAGED_UI: &str = "/usr/share/openwrt-clash-lite/ui";
 const MIHOMO_FALLBACKS: [&str; 2] = ["/usr/bin/mihomo", "/etc/openclash/core/clash_meta"];
@@ -15,6 +16,7 @@ pub struct Paths {
     pub dir: PathBuf,
     pub run_dir: PathBuf,
     pub uci_file: PathBuf,
+    pub crontab: PathBuf,
 }
 
 fn env_path(name: &str, default: &str) -> PathBuf {
@@ -27,6 +29,7 @@ impl Paths {
             dir: env_path("OCLITE_DIR", DEFAULT_DIR),
             run_dir: env_path("OCLITE_RUN_DIR", DEFAULT_RUN_DIR),
             uci_file: env_path("OCLITE_UCI", DEFAULT_UCI),
+            crontab: env_path("OCLITE_CRONTAB", DEFAULT_CRONTAB),
         }
     }
 
@@ -37,6 +40,7 @@ impl Paths {
             dir: base.join("etc"),
             run_dir: base.join("run"),
             uci_file: base.join("config").join("openwrt-clash-lite"),
+            crontab: base.join("crontabs").join("root"),
         }
     }
 
@@ -107,6 +111,7 @@ mod tests {
             dir: "/a".into(),
             run_dir: "/r".into(),
             uci_file: "/c/x".into(),
+            crontab: "/t/root".into(),
         };
         assert_eq!(p.profile("R1"), Path::new("/a/profiles/R1.yaml"));
         assert_eq!(p.runtime_config(), Path::new("/r/runtime.yaml"));

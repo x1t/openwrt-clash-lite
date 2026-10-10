@@ -31,6 +31,7 @@ OpenWrt 上的 mihomo 守护进程（Rust，静态 musl，armv7 + aarch64）+ ub
 | `state.rs` / `uci.rs` | UCI 配置 ↔ `State`；`uci.rs` 只认 `config`/`option` 和 uci 的引号规则 |
 | `api.rs` | mihomo REST：版本、TUN 状态、provider 是否加载完、打开 TUN |
 | `mihomo.rs` | `update-core` |
+| `cron.rs` | 每天自动更新订阅：只增删 crontab 里带 `# openwrt-clash-lite` 标记的一行；init 脚本的 `reload_service`（UCI 变更触发）只同步 crontab，不重启、不启动服务 |
 | `subscription.rs` | 下载订阅、文件名、校验 |
 | `geo.rs` | 把 OpenClash 已有的 Country.mmdb / GeoSite.dat 链接过来，首次启动不用等下载 |
 | `sys.rs` | 唯一有系统调用的模块；非 Linux 下是空实现，纯逻辑可以在 Windows 上测 |

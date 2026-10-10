@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod cron;
 mod geo;
 mod merge;
 mod mihomo;
@@ -30,6 +31,8 @@ const USAGE: &str = "openwrt-clash-lite <command>
   list [--json]    list subscriptions
   status [--json]  show whether mihomo is up
   update-core      install the latest mihomo release for this CPU
+  auto-update      daily job: update the active subscription, restart only if it changed
+  sync-cron        write or remove the daily job in root's crontab (UCI auto_update)
   version";
 
 fn new_id() -> String {
@@ -39,11 +42,18 @@ fn new_id() -> String {
     format!("R{millis:x}")
 }
 
+/// Subscriptions hold node passwords: owner-only, like the UCI file.
+fn write_profile(paths: &Paths, id: &str, body: &str) -> Res<()> {
+    fs::create_dir_all(paths.profiles_dir())?;
+    fs::write(paths.profile(id), body)?;
+    sys::restrict_file(&paths.profile(id));
+    Ok(())
+}
+
 /// Saves a downloaded subscription under `id`, registers it, and activates it if nothing is active.
 /// A known subscription keeps its name (the user may have edited it).
 fn store(paths: &Paths, state: &mut State, id: &str, url: &str, fetched: &Fetched) -> Res<()> {
-    fs::create_dir_all(paths.profiles_dir())?;
-    fs::write(paths.profile(id), &fetched.body)?;
+    write_profile(paths, id, &fetched.body)?;
     if !state.profiles.iter().any(|p| p.id == id) {
         state.profiles.push(Profile {
             id: id.to_string(),
@@ -98,7 +108,7 @@ fn cmd_edit(paths: &Paths, id: &str, name: &str, url: &str) -> Res<()> {
     }
     if find(&state, id)?.url != url {
         let fetched = subscription::fetch(url)?;
-        fs::write(paths.profile(id), &fetched.body)?;
+        write_profile(paths, id, &fetched.body)?;
     }
     let p = state
         .profiles
@@ -109,6 +119,47 @@ fn cmd_edit(paths: &Paths, id: &str, name: &str, url: &str) -> Res<()> {
     p.url = url.to_string();
     state.save(paths)?;
     println!("saved {id}");
+    Ok(())
+}
+
+/// Daily job: an unchanged subscription causes no restart, so no interruption for the LAN.
+fn cmd_auto_update(paths: &Paths) -> Res<()> {
+    let mut state = State::load(paths)?;
+    let p = state
+        .active_profile()
+        .ok_or("no active subscription")?
+        .clone();
+    let fetched = subscription::fetch(&p.url)?;
+    let unchanged = fs::read_to_string(paths.profile(&p.id)).is_ok_and(|old| old == fetched.body);
+    store(paths, &mut state, &p.id, &p.url, &fetched)?;
+    if unchanged {
+        println!("{} unchanged", p.id);
+        return Ok(());
+    }
+    let running = api::ready(&state.controller(), &state.secret);
+    if running {
+        sys::run_cmd("/etc/init.d/openwrt-clash-lite", &["restart"]);
+    }
+    println!(
+        "{} updated{}",
+        p.id,
+        if running { "; service restarted" } else { "" }
+    );
+    Ok(())
+}
+
+fn cmd_sync_cron(paths: &Paths) -> Res<()> {
+    let state = State::load(paths)?;
+    let changed = cron::sync(paths, &state)?;
+    let job = if state.auto_update {
+        format!("daily at {}", state.update_time)
+    } else {
+        "off".into()
+    };
+    println!(
+        "subscription auto-update {job}{}",
+        if changed { " (crontab updated)" } else { "" }
+    );
     Ok(())
 }
 
@@ -232,6 +283,8 @@ fn dispatch(args: &[String], paths: &Paths) -> Res<()> {
         Some("list") => cmd_list(paths, json),
         Some("status") => cmd_status(paths, json),
         Some("update-core") => cmd_update_core(paths),
+        Some("auto-update") => cmd_auto_update(paths),
+        Some("sync-cron") => cmd_sync_cron(paths),
         Some("version") => cmd_version(),
         _ => Err(USAGE.into()),
     }
@@ -404,6 +457,14 @@ mod tests {
     fn unknown_commands_print_the_usage() {
         let paths = temp_paths("usage");
         let err = dispatch(&["bogus".into()], &paths).unwrap_err().to_string();
-        assert!(err.contains("run") && err.contains("remove <id>") && err.contains("update-core"));
+        for cmd in [
+            "run",
+            "remove <id>",
+            "update-core",
+            "auto-update",
+            "sync-cron",
+        ] {
+            assert!(err.contains(cmd), "usage lists {cmd}");
+        }
     }
 }

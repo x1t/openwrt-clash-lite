@@ -8,6 +8,7 @@ USE_PROCD=1
 PROG=/usr/bin/openwrt-clash-lite
 
 start_service() {
+	"$PROG" sync-cron >/dev/null 2>&1
 	procd_open_instance
 	procd_set_param command "$PROG" run
 	procd_set_param stdout 1
@@ -17,4 +18,14 @@ start_service() {
 	# the daemon waits up to 10 s for mihomo to remove its routes and firewall rules
 	procd_set_param term_timeout 20
 	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger "openwrt-clash-lite"
+}
+
+# a saved UCI change (e.g. from LuCI) only re-syncs the daily update job; settings that affect
+# mihomo take effect on the next restart, and a stopped service must not be started by this
+reload_service() {
+	"$PROG" sync-cron >/dev/null 2>&1
 }

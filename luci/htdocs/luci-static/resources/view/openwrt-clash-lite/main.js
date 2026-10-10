@@ -224,13 +224,20 @@ function renderSubscriptions(list) {
 function renderSettings() {
 	const m = new form.Map('openwrt-clash-lite');
 	const s = m.section(form.NamedSection, 'main', 'main', _('设置'),
-		_('修改后点页面底部的「保存并应用」，再点上方的「重启」生效。'));
+		_('修改后点页面底部的「保存并应用」。日志级别和端口还要再点上方的「重启」才生效。'));
 	let o = s.option(form.ListValue, 'log_level', _('mihomo 日志级别'));
 	[ 'silent', 'error', 'warning', 'info', 'debug' ].forEach((l) => o.value(l));
 	o.default = 'warning';
 	o = s.option(form.Value, 'port', _('面板 / API 端口'), _('Yacd 面板和 mihomo API 使用的端口，局域网可访问，由密钥保护。'));
 	o.datatype = 'port';
 	o.placeholder = '19097';
+	o = s.option(form.Flag, 'auto_update', _('每天自动更新订阅'),
+		_('到时间重新下载当前订阅；内容有变化且服务在运行时才重启，没变化不会断网。保存即生效。'));
+	o.rmempty = false;
+	o = s.option(form.Value, 'update_time', _('更新时间'), _('24 小时制，例如 06:10'));
+	o.placeholder = '06:10';
+	o.depends('auto_update', '1');
+	o.validate = (id, v) => /^([01]\d|2[0-3]):[0-5]\d$/.test(v) || _('请按 06:10 这样的格式填写');
 	return m.render();
 }
 

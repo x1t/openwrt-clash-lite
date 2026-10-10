@@ -7,6 +7,11 @@ if [ "$PKG_UPGRADE" = "1" ]; then
 	pidof openwrt-clash-lite >/dev/null && touch /tmp/openwrt-clash-lite.restart
 else
 	$SVC disable >/dev/null 2>&1
+	# remove our daily update job; other crontab lines stay
+	if grep -q '# openwrt-clash-lite$' /etc/crontabs/root 2>/dev/null; then
+		sed -i '/# openwrt-clash-lite$/d' /etc/crontabs/root
+		/etc/init.d/cron restart
+	fi
 fi
 $SVC stop >/dev/null 2>&1
 # procd stops asynchronously; wait until mihomo has removed its routes and firewall rules

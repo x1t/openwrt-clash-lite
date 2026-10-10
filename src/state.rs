@@ -16,6 +16,7 @@ pub type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
 const DEFAULT_PORT: u16 = 19097;
 const DEFAULT_LOG_LEVEL: &str = "warning";
+const DEFAULT_UPDATE_TIME: &str = "06:10";
 
 #[derive(Serialize, Clone, Default, Debug, PartialEq)]
 pub struct Profile {
@@ -32,6 +33,9 @@ pub struct State {
     pub port: u16,
     /// mihomo log level: silent, error, warning, info or debug.
     pub log_level: String,
+    /// Re-download the active subscription every day at `update_time` (HH:MM, cron job).
+    pub auto_update: bool,
+    pub update_time: String,
     pub active: Option<String>,
     pub profiles: Vec<Profile>,
 }
@@ -42,6 +46,8 @@ impl Default for State {
             secret: String::new(),
             port: DEFAULT_PORT,
             log_level: DEFAULT_LOG_LEVEL.into(),
+            auto_update: false,
+            update_time: DEFAULT_UPDATE_TIME.into(),
             active: None,
             profiles: Vec::new(),
         }
@@ -63,6 +69,8 @@ fn main_section(state: &mut State, s: &Section) -> Res<()> {
             .map_err(|_| format!("port {port:?} is not a port number"))?;
     }
     state.log_level = text("log_level").unwrap_or(state.log_level.clone());
+    state.auto_update = text("auto_update").as_deref() == Some("1");
+    state.update_time = text("update_time").unwrap_or(state.update_time.clone());
     state.active = text("active");
     Ok(())
 }
@@ -89,6 +97,8 @@ fn to_sections(state: &State) -> Vec<Section> {
         opt("secret", &state.secret),
         opt("port", &state.port.to_string()),
         opt("log_level", &state.log_level),
+        opt("auto_update", if state.auto_update { "1" } else { "0" }),
+        opt("update_time", &state.update_time),
     ];
     main.extend(state.active.as_deref().map(|a| opt("active", a)));
     let mut sections = vec![Section {
@@ -181,6 +191,8 @@ mod tests {
         });
         s.active = Some("R1".into());
         s.port = 9999;
+        s.auto_update = true;
+        s.update_time = "05:30".into();
         s.save(&paths).unwrap();
         let back = State::load(&paths).unwrap();
         assert_eq!(back, s);
