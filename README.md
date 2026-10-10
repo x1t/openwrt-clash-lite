@@ -32,10 +32,11 @@ Clash Lite 让 mihomo 自己用 **TUN 的 `auto-route` + `auto-redirect`** 接�
 - 🛡️ **TUN 透明代理**：局域网设备和路由器自己的流量都接管，DNS 由 mihomo 劫持（只用 redir-host，不用 fake-ip）
 - 🚦 **启动不断网**：规则集加载完才打开 TUN，加载期间局域网照常直连；停止或崩溃时 mihomo 自己清掉路由和防火墙规则
 - 🔁 **自动恢复**：mihomo 崩溃后按 2、4、8…30 秒退避重启；守护进程被杀，mihomo 也会跟着退出并清理
-- 🔗 **订阅**：添加、编辑（名称和链接）、更新、切换、删除，下载时 User-Agent 固定为 `xctcc`
+- 🔗 **订阅**：添加、编辑（名称、链接、User-Agent）、更新、切换、删除；User-Agent 默认 `xctcc`，每个订阅可以单独设置
 - ⏰ **每天自动更新订阅**：页面上开关、设时间；内容有变化才重启，没变化不断网
 - 📊 **Yacd 面板**：打包在 ipk 里，页面上一键打开并自动登录
 - ⬆️ **更新内核**：一键安装 mihomo 官方最新版，带空间检查和配置检查，失败不影响旧内核（见下文）
+- 🔄 **一键更新 Clash Lite**：页面上点「更新 Clash Lite」，自动下载适合本机架构的新版 ipk 并安装，订阅、内核、开机自启都保留
 - 🧩 **LuCI 页面**：「服务 → Clash Lite」，状态、启停、开机自启、订阅、设置、日志都在一页
 - 🔌 **ubus 接口**：`ubus call oclite …`，脚本和其它程序也能控制
 - ⚙️ **UCI 配置**：`/etc/config/openwrt-clash-lite`，可以用 `uci set` 修改，系统备份时会一起保留
@@ -119,14 +120,16 @@ uci set openclash.config.enable=1; uci commit openclash; /etc/init.d/openclash s
 |---|---|---|
 | `status` | | 运行状态、版本、内存、当前订阅、服务和开机自启状态、OpenClash 是否在运行 |
 | `list` | | 订阅列表 |
-| `add` | `url` | 添加订阅 |
-| `edit` | `id` `name` `url` | 改名称或链接（新链接会先下载验证） |
+| `add` | `url` `ua`（可选） | 添加订阅 |
+| `edit` | `id` `name` `url` `ua` | 改名称、链接或 User-Agent（新链接 / 新 UA 会先下载验证，`ua` 为空表示默认 `xctcc`） |
 | `update` | `id`（可选） | 重新下载订阅，不填就是当前订阅 |
 | `use` | `id` | 切换当前订阅 |
 | `remove` | `id` | 删除订阅 |
 | `service` | `action` | `start` `stop` `restart` `enable` `disable` |
 | `update_core` | | 后台更新内核，用 `log` 查看进度 |
-| `log` | `name` `lines` | `service`（logread）、`mihomo`、`core`（更新进度） |
+| `update_self` | | 后台更新 Clash Lite 本身，用 `log {"name":"self"}` 查看进度 |
+| `version` | | ubus 插件的版本 |
+| `log` | `name` `lines` | `service`（logread）、`mihomo`、`core`（内核更新进度）、`self`（自身更新进度） |
 
 在路由器上：
 
@@ -151,8 +154,8 @@ curl -s http://192.168.1.1/ubus -d '{"jsonrpc":"2.0","id":2,"method":"call","par
 
 ```text
 openwrt-clash-lite run              前台运行（procd 用）
-openwrt-clash-lite add <url>        添加订阅
-openwrt-clash-lite edit <id> <名称> <url>
+openwrt-clash-lite add <url> [ua]   添加订阅
+openwrt-clash-lite edit <id> <名称> <url> [ua]
 openwrt-clash-lite update [id]      重新下载订阅
 openwrt-clash-lite use <id>         切换订阅
 openwrt-clash-lite remove <id>      删除订阅
@@ -161,6 +164,7 @@ openwrt-clash-lite status [--json]
 openwrt-clash-lite update-core      更新 mihomo
 openwrt-clash-lite auto-update      定时任务用：更新当前订阅，有变化才重启
 openwrt-clash-lite sync-cron        按 UCI 写入或删除 crontab 里的定时任务
+openwrt-clash-lite self-update      更新 Clash Lite 本身
 ```
 
 ## ⏰ 每天自动更新订阅
@@ -188,7 +192,9 @@ openwrt-clash-lite sync-cron
 
 面板和 API 端口默认 `19097`，监听所有接口，由密钥保护；OpenWrt 默认防火墙不放行 WAN 入站。
 
-**升级**：直接 `opkg install` 新版本。开机自启设置、订阅、内核、运行状态都会保留，正在运行的服务会自动重启。
+**升级**：页面上点「更新 Clash Lite」，或者手动 `opkg install` 新版本。开机自启设置、订阅、内核、运行状态都会保留，正在运行的服务会自动重启。
+
+一键更新的流程参考 OpenClash：查 GitHub 最新版本 → 按 `opkg print-architecture` 选本机架构的 ipk（装了页面包就一起更新）→ 核对文件大小 → `opkg install --noaction` 试装 → 正式安装。试装失败就什么都不装。在 24.10 这类较老的系统上，安装时会重启一次 rpcd 来加载新的接口，后台页面需要重新登录。
 
 **卸载**：`opkg remove luci-app-openwrt-clash-lite openwrt-clash-lite`。会停止服务、清掉路由和防火墙规则、删除 `/etc/openwrt-clash-lite`，只保留 `/etc/config/openwrt-clash-lite`（重装后订阅还在，不要的话手动删掉）。
 
@@ -200,7 +206,7 @@ openwrt-clash-lite sync-cron
 cargo test
 cargo zigbuild --release --target armv7-unknown-linux-musleabihf
 cargo zigbuild --release --target aarch64-unknown-linux-musl
-bash scripts/build-ipk.sh 0.1.7 armv7 target/armv7-unknown-linux-musleabihf/release/openwrt-clash-lite dist
+bash scripts/build-ipk.sh 0.1.8 armv7 target/armv7-unknown-linux-musleabihf/release/openwrt-clash-lite dist
 ```
 
 `build-ipk.sh` 要在 Linux（或 WSL）上运行，Windows 文件系统存不了可执行权限。推送 `v*` 标签后，GitHub Actions 会自动编译并发布全部 ipk。

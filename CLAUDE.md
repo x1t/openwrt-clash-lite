@@ -13,12 +13,13 @@ OpenWrt 上的 mihomo 守护进程（Rust，静态 musl，armv7 + aarch64）+ ub
 3. **不用 fake-ip**（用户要求）：订阅里的 `enhanced-mode` 一律改成 `redir-host`。
 4. **订阅原文基本不动**：逐行处理，不用 YAML 解析器。只删我们接管的顶层键（见 `OWNED_KEYS`）、`dns.listen`（会和 dnsmasq 抢 53 端口）和 `---` 文档分隔符（mihomo 只读第一个文档）。
 5. **配置在 UCI**：`/etc/config/openwrt-clash-lite`，由 `uci.rs` 自己解析和写出（不调用 `uci` 命令，方便在主机上测试）。坏文件要报错，**不能静默重置**（下一次保存会清空用户的订阅列表）。写文件用临时文件 + 改名，权限 600。
-6. **下载订阅的 User-Agent 固定为 `xctcc`**，用户的订阅只认这个。
+6. **下载订阅的 User-Agent 默认 `xctcc`**（用户的订阅只认这个），每个订阅可在 UCI `ua` 里单独设置；改 URL 或 UA 都要先下载验证，失败不做任何改动。
 7. **安装后不自动启动、不开开机自启**：会和 OpenClash 抢网络。
-8. **升级不能丢数据**：opkg 升级时会运行旧版本的 `prerm`/`postrm`，脚本必须看 `PKG_UPGRADE=1`（OpenWrt 自己的 `default_prerm` 也这么做）。改这些脚本时，要考虑已经装在路由器上的旧脚本会在下一次升级时运行。
-9. **ipk 按 opkg 架构名分别打包**：这个 opkg 遇到 `preinst` 失败**不会中止安装**，只能靠 `Architecture` 让 opkg 拒绝。armv7 只列带硬件浮点的架构名。
-10. **更新内核要能失败**：空间检查、gzip 流完整、`-v`、对运行中配置 `-t`，全部通过才在同目录改名替换。已是最新版就不下载。
-11. **依赖要克制**：HTTP 用阻塞式 `ureq`，不引入 tokio。新增 crate 前先问用户。
+8. **ubus 插件版本**：`files/oclite.uc` 里的 `@VERSION@` 由 `build-ipk.sh` 替换；postinst 比较 `ubus call oclite version` 和二进制版本，不一致才重启 rpcd（会让 LuCI 用户掉线）。
+9. **升级不能丢数据**：opkg 升级时会运行旧版本的 `prerm`/`postrm`，脚本必须看 `PKG_UPGRADE=1`（OpenWrt 自己的 `default_prerm` 也这么做）。改这些脚本时，要考虑已经装在路由器上的旧脚本会在下一次升级时运行。
+10. **ipk 按 opkg 架构名分别打包**：这个 opkg 遇到 `preinst` 失败**不会中止安装**，只能靠 `Architecture` 让 opkg 拒绝。armv7 只列带硬件浮点的架构名。
+11. **更新内核要能失败**：空间检查、gzip 流完整、`-v`、对运行中配置 `-t`，全部通过才在同目录改名替换。已是最新版就不下载。
+12. **依赖要克制**：HTTP 用阻塞式 `ureq`，不引入 tokio。新增 crate 前先问用户。
 
 ## 模块地图
 
@@ -31,6 +32,7 @@ OpenWrt 上的 mihomo 守护进程（Rust，静态 musl，armv7 + aarch64）+ ub
 | `state.rs` / `uci.rs` | UCI 配置 ↔ `State`；`uci.rs` 只认 `config`/`option` 和 uci 的引号规则 |
 | `api.rs` | mihomo REST：版本、TUN 状态、provider 是否加载完、打开 TUN |
 | `mihomo.rs` | `update-core` |
+| `selfupdate.rs` | `self-update`：GitHub 最新 release → 按 opkg 架构选 ipk → 核对大小 → `opkg --noaction` 试装 → `exec opkg install`（exec 是为了不让安装脚本里的 `pidof openwrt-clash-lite` 把更新进程当成服务） |
 | `cron.rs` | 每天自动更新订阅：只增删 crontab 里带 `# openwrt-clash-lite` 标记的一行；init 脚本的 `reload_service`（UCI 变更触发）只同步 crontab，不重启、不启动服务 |
 | `subscription.rs` | 下载订阅、文件名、校验 |
 | `geo.rs` | 把 OpenClash 已有的 Country.mmdb / GeoSite.dat 链接过来，首次启动不用等下载 |
