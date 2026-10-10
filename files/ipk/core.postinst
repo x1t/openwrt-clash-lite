@@ -17,4 +17,9 @@ chmod 600 $CFG
 /etc/init.d/rpcd reload
 sleep 1
 ubus list oclite >/dev/null 2>&1 || /etc/init.d/rpcd restart
+# a fresh install never starts by itself (it would fight OpenClash); an upgrade restores the state
+if [ -f /tmp/openwrt-clash-lite.restart ]; then
+	rm -f /tmp/openwrt-clash-lite.restart
+	/etc/init.d/openwrt-clash-lite start
+fi
 exit 0

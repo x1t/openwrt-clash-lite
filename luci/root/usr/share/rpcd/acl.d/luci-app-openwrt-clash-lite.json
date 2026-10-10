@@ -10,7 +10,7 @@
 		"write": {
 			"uci": [ "openwrt-clash-lite" ],
 			"ubus": {
-				"oclite": [ "add", "update", "use", "remove", "service", "update_core" ],
+				"oclite": [ "add", "edit", "update", "use", "remove", "service", "update_core" ],
 				"rc": [ "init" ]
 			}
 		}

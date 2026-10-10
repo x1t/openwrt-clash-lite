@@ -75,6 +75,18 @@ mod imp {
     pub fn rss_kb(pid: u32) -> Option<u64> {
         super::parse_rss(&fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
     }
+
+    /// Bytes available to unprivileged writers on the filesystem holding `path`.
+    pub fn free_bytes(path: &Path) -> Option<u64> {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+        // SAFETY: statvfs only writes into the zeroed struct; `c` is a valid C string.
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
+        Some(st.f_bavail as u64 * st.f_frsize as u64)
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -96,10 +108,14 @@ mod imp {
     pub fn rss_kb(_pid: u32) -> Option<u64> {
         None
     }
+    pub fn free_bytes(_path: &Path) -> Option<u64> {
+        None
+    }
 }
 
 pub use imp::{
-    die_with_parent, link_file, list_procs, make_executable, restrict_file, rss_kb, terminate,
+    die_with_parent, free_bytes, link_file, list_procs, make_executable, restrict_file, rss_kb,
+    terminate,
 };
 
 /// Resident memory in kB from the text of `/proc/<pid>/status` (`VmRSS:   12345 kB`).

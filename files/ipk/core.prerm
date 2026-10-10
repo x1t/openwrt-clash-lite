@@ -1,7 +1,14 @@
 #!/bin/sh
 [ -n "$IPKG_INSTROOT" ] && exit 0
-/etc/init.d/openwrt-clash-lite disable >/dev/null 2>&1
-/etc/init.d/openwrt-clash-lite stop >/dev/null 2>&1
+SVC=/etc/init.d/openwrt-clash-lite
+# opkg sets PKG_UPGRADE=1 when this runs as part of an upgrade: keep the boot setting and
+# remember whether the service ran, so postinst of the new version can start it again
+if [ "$PKG_UPGRADE" = "1" ]; then
+	pidof openwrt-clash-lite >/dev/null && touch /tmp/openwrt-clash-lite.restart
+else
+	$SVC disable >/dev/null 2>&1
+fi
+$SVC stop >/dev/null 2>&1
 # procd stops asynchronously; wait until mihomo has removed its routes and firewall rules
 i=0
 while pidof openwrt-clash-lite >/dev/null && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done

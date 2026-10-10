@@ -24,6 +24,7 @@ const USAGE: &str = "openwrt-clash-lite <command>
   run              run mihomo with transparent takeover (foreground, used by procd)
   add <url>        download a subscription; it becomes active if none is
   update [id]      re-download the active (or the given) subscription
+  edit <id> <name> <url>  rename a subscription or change its URL (a new URL is downloaded first)
   use <id>         make a subscription active (restart the service to apply)
   remove <id>      delete a subscription
   list [--json]    list subscriptions
@@ -39,16 +40,16 @@ fn new_id() -> String {
 }
 
 /// Saves a downloaded subscription under `id`, registers it, and activates it if nothing is active.
+/// A known subscription keeps its name (the user may have edited it).
 fn store(paths: &Paths, state: &mut State, id: &str, url: &str, fetched: &Fetched) -> Res<()> {
     fs::create_dir_all(paths.profiles_dir())?;
     fs::write(paths.profile(id), &fetched.body)?;
-    match state.profiles.iter_mut().find(|p| p.id == id) {
-        Some(p) => p.name = fetched.name.clone(),
-        None => state.profiles.push(Profile {
+    if !state.profiles.iter().any(|p| p.id == id) {
+        state.profiles.push(Profile {
             id: id.to_string(),
             name: fetched.name.clone(),
             url: url.to_string(),
-        }),
+        });
     }
     state.active.get_or_insert_with(|| id.to_string());
     state.save(paths)
@@ -84,6 +85,30 @@ fn cmd_update(paths: &Paths, id: Option<&str>) -> Res<()> {
     let url = find(&state, &id)?.url.clone();
     store(paths, &mut state, &id, &url, &subscription::fetch(&url)?)?;
     println!("updated {id}; restart the service to apply");
+    Ok(())
+}
+
+/// Renames a subscription and/or changes its URL. A new URL is downloaded first, so a bad one
+/// changes nothing.
+fn cmd_edit(paths: &Paths, id: &str, name: &str, url: &str) -> Res<()> {
+    let mut state = State::load(paths)?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("name must not be empty".into());
+    }
+    if find(&state, id)?.url != url {
+        let fetched = subscription::fetch(url)?;
+        fs::write(paths.profile(id), &fetched.body)?;
+    }
+    let p = state
+        .profiles
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or(format!("unknown subscription {id}"))?;
+    p.name = name.to_string();
+    p.url = url.to_string();
+    state.save(paths)?;
+    println!("saved {id}");
     Ok(())
 }
 
@@ -196,6 +221,10 @@ fn dispatch(args: &[String], paths: &Paths) -> Res<()> {
         Some("run") => supervisor::run(paths),
         Some("add") => cmd_add(paths, arg(1).ok_or("usage: add <url>")?),
         Some("update") => cmd_update(paths, arg(1)),
+        Some("edit") => match (arg(1), arg(2), arg(3)) {
+            (Some(id), Some(name), Some(url)) => cmd_edit(paths, id, name, url),
+            _ => Err("usage: edit <id> <name> <url>".into()),
+        },
         Some("use") => cmd_use(paths, arg(1).ok_or("usage: use <id>")?),
         Some("remove") => cmd_remove(paths, arg(1).ok_or("usage: remove <id>")?),
         Some("list") => cmd_list(paths, json),
@@ -263,17 +292,58 @@ mod tests {
     }
 
     #[test]
-    fn storing_the_same_id_again_updates_instead_of_duplicating() {
+    fn storing_the_same_id_again_updates_the_file_but_keeps_the_name() {
         let paths = temp_paths("update");
         let mut state = State::load(&paths).unwrap();
         store(&paths, &mut state, "R1", "http://a", &fetched("old")).unwrap();
         store(&paths, &mut state, "R1", "http://a", &fetched("new")).unwrap();
         assert_eq!(state.profiles.len(), 1);
-        assert_eq!(state.profiles[0].name, "new");
+        assert_eq!(
+            state.profiles[0].name, "old",
+            "an edited name survives updates"
+        );
         assert!(
             fs::read_to_string(paths.profile("R1"))
                 .unwrap()
                 .contains("# new")
+        );
+        cleanup(&paths);
+    }
+
+    #[test]
+    fn editing_the_name_only_needs_no_download() {
+        let paths = temp_paths("editname");
+        two_profiles(&paths);
+        cmd_edit(&paths, "R1", "  我的机场  ", "http://a").unwrap();
+        let state = State::load(&paths).unwrap();
+        assert_eq!(state.profiles[0].name, "我的机场");
+        assert_eq!(state.profiles[0].url, "http://a");
+        assert!(
+            cmd_edit(&paths, "R1", "  ", "http://a").is_err(),
+            "empty name"
+        );
+        assert!(cmd_edit(&paths, "nope", "x", "http://a").is_err());
+        cleanup(&paths);
+    }
+
+    #[test]
+    fn a_new_url_that_cannot_be_downloaded_changes_nothing() {
+        let paths = temp_paths("editurl");
+        two_profiles(&paths);
+        // nothing listens on port 1, so the download fails for real
+        assert!(cmd_edit(&paths, "R1", "renamed", "http://127.0.0.1:1/sub").is_err());
+        let state = State::load(&paths).unwrap();
+        assert_eq!(
+            (
+                state.profiles[0].name.as_str(),
+                state.profiles[0].url.as_str()
+            ),
+            ("A", "http://a")
+        );
+        assert!(
+            fs::read_to_string(paths.profile("R1"))
+                .unwrap()
+                .contains("# A")
         );
         cleanup(&paths);
     }

@@ -78,6 +78,15 @@ const methods = {
 			return result(BIN + ' update' + (req.args?.id ? ' ' + quote(req.args.id) : ''));
 		}
 	},
+	edit: {
+		args: { id: 'id', name: 'name', url: 'url' },
+		call: function(req) {
+			const a = req.args ?? {};
+			if (!a.url || !match(a.url, /^https?:\/\//))
+				return { ok: false, message: 'url must start with http:// or https://' };
+			return result(BIN + ' edit ' + quote(a.id ?? '') + ' ' + quote(a.name ?? '') + ' ' + quote(a.url));
+		}
+	},
 	use: {
 		args: { id: 'id' },
 		call: function(req) {

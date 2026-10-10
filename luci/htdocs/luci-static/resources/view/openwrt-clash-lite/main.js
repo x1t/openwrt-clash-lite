@@ -12,6 +12,7 @@ const oclite = (method, params) => rpc.declare({
 const callStatus = oclite('status');
 const callList = oclite('list');
 const callAdd = oclite('add', [ 'url' ]);
+const callEdit = oclite('edit', [ 'id', 'name', 'url' ]);
 const callUpdate = oclite('update', [ 'id' ]);
 const callUse = oclite('use', [ 'id' ]);
 const callRemove = oclite('remove', [ 'id' ]);
@@ -142,6 +143,35 @@ function renderStatus() {
 	]);
 }
 
+function editDialog(sub, reload) {
+	const field = (value) => E('input', { 'type': 'text', 'class': 'cbi-input-text', 'style': 'width:100%', 'value': value });
+	const name = field(sub.name);
+	const url = field(sub.url);
+	const error = E('p', { 'class': 'alert-message danger', 'style': 'display:none' });
+	const save = function() {
+		const newUrl = url.value.trim();
+		return callEdit(sub.id, name.value, newUrl).then(function(r) {
+			if (r && r.ok === false) {
+				error.textContent = r.message || _('保存失败');
+				error.style.display = '';
+				return;
+			}
+			ui.hideModal();
+			const restart = sub.active && newUrl !== sub.url ? applyIfRunning() : Promise.resolve();
+			return restart.then(reload);
+		});
+	};
+	ui.showModal(_('编辑订阅'), [
+		E('p', _('名称')), name,
+		E('p', _('订阅链接（修改后会先下载验证，下载失败则不做任何改动）')), url,
+		error,
+		E('div', { 'class': 'right', 'style': 'margin-top:1em' }, [
+			E('button', { 'class': 'cbi-button', 'click': ui.hideModal }, _('取消')), ' ',
+			button(_('保存'), 'positive', save)
+		])
+	]);
+}
+
 function subscriptionRow(sub, reload) {
 	const when = sub.updated ? new Date(sub.updated * 1000).toLocaleString() : '-';
 	const act = (fn) => () => fn().then(function(res) { if (!failed(res)) return reload(); });
@@ -151,6 +181,7 @@ function subscriptionRow(sub, reload) {
 		E('td', { 'class': 'td right' }, [
 			sub.active ? '' : button(_('使用'), 'apply',
 				act(() => callUse(sub.id).then((r) => failed(r) ? r : applyIfRunning().then(() => r)))), ' ',
+			button(_('编辑'), 'edit', () => editDialog(sub, reload)), ' ',
 			button(_('更新'), 'action',
 				act(() => callUpdate(sub.id).then((r) => (!failed(r) && sub.active) ? applyIfRunning().then(() => r) : r))), ' ',
 			button(_('删除'), 'negative', act(function() {

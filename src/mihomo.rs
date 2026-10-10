@@ -1,9 +1,10 @@
 //! `update-core`: installs the latest mihomo release for this CPU as `<dir>/mihomo`.
-//! The download is decompressed while streaming to a temp file, checked by running `-v`,
-//! and only then renamed over the old binary, so a failed update leaves the old core working.
+//! Checked before anything is replaced: enough free flash, a complete gzip stream, `-v` runs,
+//! and the running config passes `-t` with the new core. Only then is the temp file renamed
+//! over the old binary (atomic, same directory), so a failed update leaves the old core working.
 use crate::{config::Paths, state::Res, sys};
 use serde_json::Value;
-use std::{fs, io, path::Path, time::Duration};
+use std::{fs, io, path::Path, process::Command, time::Duration};
 use ureq::Agent;
 
 const LATEST: &str = "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest";
@@ -19,16 +20,47 @@ fn arch() -> &'static str {
     }
 }
 
-/// (tag, download url) of the plain `mihomo-linux-<arch>-<tag>.gz` asset.
-fn pick_asset(release: &Value, arch: &str) -> Option<(String, String)> {
+struct Asset {
+    tag: String,
+    url: String,
+    gz_size: u64,
+}
+
+/// The plain `mihomo-linux-<arch>-<tag>.gz` asset of a release.
+fn pick_asset(release: &Value, arch: &str) -> Option<Asset> {
     let tag = release["tag_name"].as_str()?;
     let want = format!("mihomo-linux-{arch}-{tag}.gz");
     let asset = release["assets"]
         .as_array()?
         .iter()
         .find(|a| a["name"].as_str() == Some(want.as_str()))?;
-    let url = asset["browser_download_url"].as_str()?;
-    Some((tag.to_string(), url.to_string()))
+    Some(Asset {
+        tag: tag.to_string(),
+        url: asset["browser_download_url"].as_str()?.to_string(),
+        gz_size: asset["size"].as_u64().unwrap_or(0),
+    })
+}
+
+/// Free flash needed: the core unpacks to about 2.7x the download (v1.19.32 armv7: 21 MB -> 56 MB);
+/// 3x plus 32 MB keeps the overlay from filling up while the old core still exists.
+fn space_needed(gz_size: u64) -> u64 {
+    gz_size * 3 + 32 * 1024 * 1024
+}
+
+fn check_space(dir: &Path, gz_size: u64) -> Res<()> {
+    let (Some(free), need) = (sys::free_bytes(dir), space_needed(gz_size)) else {
+        return Ok(());
+    };
+    if free < need {
+        return Err(format!(
+            "not enough free space in {}: {} MB free, {} MB needed; nothing was changed",
+            dir.display(),
+            free / 1_048_576,
+            need / 1_048_576
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn agent() -> Agent {
@@ -57,20 +89,47 @@ fn version_of(bin: &Path) -> Res<String> {
     }
 }
 
+/// When the service runs, the new core must accept its config (`-t`), or it would not start.
+fn test_running_config(bin: &Path, paths: &Paths) -> Res<()> {
+    let config = paths.runtime_config();
+    if !config.is_file() {
+        return Ok(());
+    }
+    let mut cmd = Command::new(bin);
+    cmd.arg("-t")
+        .arg("-d")
+        .arg(paths.data_dir())
+        .arg("-f")
+        .arg(&config);
+    if let Some(ui) = paths.ui_dir() {
+        cmd.env("SAFE_PATHS", ui);
+    }
+    let out = cmd.output()?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let text = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
+    let last = text.lines().last().unwrap_or_default().to_string();
+    Err(format!("the new core rejects the current config, keeping the old one: {last}").into())
+}
+
 pub fn update(paths: &Paths) -> Res<String> {
     let release: Value = agent().get(LATEST).call()?.body_mut().read_json()?;
-    let (tag, url) = pick_asset(&release, arch()).ok_or(format!(
+    let asset = pick_asset(&release, arch()).ok_or(format!(
         "no mihomo-linux-{} asset in the latest release",
         arch()
     ))?;
     fs::create_dir_all(&paths.dir)?;
+    check_space(&paths.dir, asset.gz_size)?;
     let target = paths.own_mihomo();
     let tmp = target.with_extension("new");
-    let result = download_gz(&url, &tmp).and_then(|()| version_of(&tmp));
+    let result = download_gz(&asset.url, &tmp)
+        .and_then(|()| version_of(&tmp))
+        .and_then(|v| test_running_config(&tmp, paths).map(|()| v));
     match result {
         Ok(version) => {
             fs::rename(&tmp, &target)?;
-            Ok(format!("{tag}: {version}"))
+            Ok(format!("{}: {version}", asset.tag))
         }
         Err(e) => {
             let _ = fs::remove_file(&tmp);
@@ -96,7 +155,7 @@ mod tests {
         ];
         let assets: Vec<Value> = names
             .iter()
-            .map(|n| json!({"name": n, "browser_download_url": format!("https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/{n}")}))
+            .map(|n| json!({"name": n, "size": 21_167_899, "browser_download_url": format!("https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/{n}")}))
             .collect();
         json!({"tag_name": "v1.19.32", "assets": assets})
     }
@@ -104,13 +163,34 @@ mod tests {
     #[test]
     fn picks_the_plain_gz_for_each_cpu() {
         for arch in ["arm64", "armv7", "amd64"] {
-            let (tag, url) = pick_asset(&release(), arch).unwrap();
-            assert_eq!(tag, "v1.19.32");
-            assert!(
-                url.ends_with(&format!("/mihomo-linux-{arch}-v1.19.32.gz")),
-                "{url}"
-            );
+            let a = pick_asset(&release(), arch).unwrap();
+            assert_eq!(a.tag, "v1.19.32");
+            assert_eq!(a.gz_size, 21_167_899);
+            let want = format!("/mihomo-linux-{arch}-v1.19.32.gz");
+            assert!(a.url.ends_with(&want), "{}", a.url);
         }
+    }
+
+    #[test]
+    fn the_space_check_covers_the_real_unpacked_size() {
+        // v1.19.32 armv7: 21_167_899 bytes download, 56_164_478 bytes unpacked
+        assert!(space_needed(21_167_899) > 56_164_478 + 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn too_little_free_space_is_refused_before_downloading() {
+        let dir = std::env::temp_dir();
+        if sys::free_bytes(&dir).is_some() {
+            let err = check_space(&dir, u64::MAX / 4).unwrap_err().to_string();
+            assert!(err.contains("nothing was changed"), "{err}");
+        }
+        assert!(check_space(&dir, 1).is_ok());
+    }
+
+    #[test]
+    fn without_a_running_config_there_is_nothing_to_test() {
+        let paths = Paths::under(&std::env::temp_dir().join("oclite-no-runtime"));
+        assert!(test_running_config(Path::new("/nonexistent/mihomo"), &paths).is_ok());
     }
 
     #[test]
