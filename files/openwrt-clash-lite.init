@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+# procd service for openwrt-clash-lite: the daemon supervises mihomo itself (restart with back-off),
+# procd only restarts the daemon. Messages go to logread; mihomo's own log is in /tmp/openwrt-clash-lite.
+
+START=99
+STOP=15
+USE_PROCD=1
+PROG=/usr/bin/openwrt-clash-lite
+
+start_service() {
+	procd_open_instance
+	procd_set_param command "$PROG" run
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	# give up after 5 quick failures (no subscription yet, OpenClash still running, ...)
+	procd_set_param respawn 3600 5 5
+	# the daemon waits up to 10 s for mihomo to remove its routes and firewall rules
+	procd_set_param term_timeout 20
+	procd_close_instance
+}

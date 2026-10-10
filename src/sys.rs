@@ -1,0 +1,91 @@
+//! The only module with OS-specific calls. Non-Linux builds get inert stubs so the pure logic
+//! (config merge, rule parsing, back-off, ...) can be unit-tested on a developer machine.
+use std::{path::Path, process::Command};
+
+/// Runs a program and returns (succeeded, stdout + stderr). A missing program counts as failure.
+pub fn run_cmd(program: &str, args: &[&str]) -> (bool, String) {
+    match Command::new(program).args(args).output() {
+        Ok(out) => {
+            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+            (out.status.success(), text)
+        }
+        Err(e) => (false, e.to_string()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod imp {
+    use std::{
+        fs, os::unix::fs::PermissionsExt, os::unix::process::CommandExt, path::Path,
+        process::Command,
+    };
+
+    pub fn terminate(pid: u32) {
+        // SAFETY: plain syscall with integer arguments.
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    }
+
+    /// Makes the kernel send SIGTERM to the child if we die, even by SIGKILL, so mihomo still tears
+    /// down its own routes and firewall rules instead of leaving them behind.
+    pub fn die_with_parent(cmd: &mut Command) {
+        // SAFETY: the closure only calls prctl, which is async-signal-safe.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(
+                    libc::PR_SET_PDEATHSIG,
+                    libc::SIGTERM as libc::c_ulong,
+                    0,
+                    0,
+                    0,
+                );
+                Ok(())
+            });
+        }
+    }
+
+    /// (pid, comm) of every process, from /proc.
+    pub fn list_procs() -> Vec<(u32, String)> {
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|e| {
+                let pid = e.file_name().to_str()?.parse::<u32>().ok()?;
+                let comm = fs::read_to_string(e.path().join("comm")).ok()?;
+                Some((pid, comm.trim().to_string()))
+            })
+            .collect()
+    }
+
+    pub fn restrict_file(path: &Path) {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+
+    /// Symlink: costs no flash space and follows the source if it is updated.
+    pub fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(src, dst)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod imp {
+    use std::{path::Path, process::Command};
+
+    pub fn terminate(_pid: u32) {}
+    pub fn die_with_parent(_cmd: &mut Command) {}
+    pub fn list_procs() -> Vec<(u32, String)> {
+        Vec::new()
+    }
+    pub fn restrict_file(_path: &Path) {}
+    pub fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+        std::fs::copy(src, dst).map(|_| ())
+    }
+}
+
+pub use imp::{die_with_parent, link_file, list_procs, restrict_file, terminate};
+
+pub fn file_exists(path: &str) -> bool {
+    Path::new(path).exists()
+}

@@ -1,0 +1,8 @@
+/target
+# private: router notes, test scripts, backups, real subscriptions
+/_notes/
+*.SECRET
+state.json
+/profiles/
+*.log
+/dist/
