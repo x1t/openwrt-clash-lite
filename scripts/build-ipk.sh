@@ -48,7 +48,6 @@ Package: $2
 Version: $VERSION
 Depends: $4
 Source: https://github.com/x1t/openwrt-clash-lite
-License: MIT
 Section: net
 Architecture: $3
 Installed-Size: $((size * 1024))
