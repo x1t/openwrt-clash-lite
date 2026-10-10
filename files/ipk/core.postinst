@@ -12,5 +12,9 @@ if [ -z "$(uci -q get openwrt-clash-lite.main.secret)" ]; then
 fi
 uci commit openwrt-clash-lite
 chmod 600 $CFG
+# newer rpcd picks up the ubus plugin on reload; older ones (24.10) need a restart,
+# which also logs out LuCI sessions, so only restart when the reload was not enough
 /etc/init.d/rpcd reload
+sleep 1
+ubus list oclite >/dev/null 2>&1 || /etc/init.d/rpcd restart
 exit 0

@@ -2,4 +2,6 @@
 [ -n "$IPKG_INSTROOT" ] && exit 0
 rm -rf /etc/openwrt-clash-lite /tmp/openwrt-clash-lite /usr/share/openwrt-clash-lite
 /etc/init.d/rpcd reload
+sleep 1
+ubus list oclite >/dev/null 2>&1 && /etc/init.d/rpcd restart
 exit 0
