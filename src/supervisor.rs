@@ -50,15 +50,11 @@ fn open_log(path: &Path) -> Res<File> {
 fn write_runtime(paths: &Paths, state: &State, profile: &Path) -> Res<()> {
     let subscription = fs::read_to_string(profile)
         .map_err(|e| format!("cannot read profile {}: {e}", profile.display()))?;
-    let ui = paths.ui_dir();
-    let ui_dir = ui
-        .join("index.html")
-        .is_file()
-        .then(|| ui.to_string_lossy().into_owned());
+    let ui_dir = paths.ui_dir().map(|d| d.to_string_lossy().into_owned());
     let config = merge::compose(
         &subscription,
         &Overrides {
-            controller: &state.controller,
+            controller: &state.listen(),
             secret: &state.secret,
             log_level: &state.log_level,
             ui_dir: ui_dir.as_deref(),
@@ -86,8 +82,11 @@ fn spawn_core(paths: &Paths, bin: &Path) -> Res<Child> {
         .stdout(log.try_clone()?)
         .stderr(log);
     sys::die_with_parent(&mut cmd);
-    cmd.spawn()
-        .map_err(|e| format!("cannot start {}: {e}", bin.display()).into())
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("cannot start {}: {e}", bin.display()))?;
+    fs::write(paths.pid_file(), child.id().to_string())?;
+    Ok(child)
 }
 
 /// SIGTERM first so mihomo cleans up after itself; SIGKILL only if it hangs.
@@ -116,14 +115,14 @@ struct Startup {
 
 impl Startup {
     fn step(&mut self, state: &State) {
-        let (ctl, secret) = (state.controller.as_str(), state.secret.as_str());
+        let (ctl, secret) = (state.controller(), state.secret.as_str());
         match self.ready_at {
-            None if api::ready(ctl, secret) => {
+            None if api::ready(&ctl, secret) => {
                 self.ready_at = Some(Instant::now());
                 info("mihomo is ready; waiting for its providers before taking over");
             }
-            Some(at) if !self.tun_requested => self.request_tun(ctl, secret, at.elapsed()),
-            Some(_) if !self.active && api::tun_enabled(ctl, secret).unwrap_or(false) => {
+            Some(at) if !self.tun_requested => self.request_tun(&ctl, secret, at.elapsed()),
+            Some(_) if !self.active && api::tun_enabled(&ctl, secret).unwrap_or(false) => {
                 self.active = true;
                 info("takeover active (TUN is up)");
             }
@@ -202,9 +201,10 @@ pub fn run(paths: &Paths) -> Res<()> {
     let state = State::load(paths)?;
     state.save(paths)?; // keeps the generated secret stable across runs
     let profile = state
-        .active_profile_path(paths)
+        .active_profile()
+        .map(|p| paths.profile(&p.id))
         .filter(|p| p.is_file())
-        .ok_or("no active profile: run `openwrt-clash-lite add <subscription-url>` first")?;
+        .ok_or("no active subscription: run `openwrt-clash-lite add <subscription-url>` first")?;
     let bin = paths.mihomo_bin().ok_or(
         "mihomo binary not found: put it at <dir>/mihomo or /usr/bin/mihomo, or set OCLITE_MIHOMO",
     )?;
@@ -220,6 +220,7 @@ pub fn run(paths: &Paths) -> Res<()> {
     let result = supervise(paths, &state, &bin, &profile, &stop);
     takeover::release(guard);
     let _ = fs::remove_file(paths.runtime_config());
+    let _ = fs::remove_file(paths.pid_file());
     info("stopped; takeover rules removed");
     result
 }

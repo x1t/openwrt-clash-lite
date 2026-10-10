@@ -2,14 +2,17 @@ mod api;
 mod config;
 mod geo;
 mod merge;
+mod mihomo;
 mod state;
 mod subscription;
 mod supervisor;
 mod sys;
 mod takeover;
+mod uci;
 
 use config::Paths;
-use state::{Profile, Res, State, now_secs};
+use serde_json::{Value, json};
+use state::{Profile, Res, State};
 use std::{
     fs,
     process::ExitCode,
@@ -18,12 +21,14 @@ use std::{
 use subscription::Fetched;
 
 const USAGE: &str = "openwrt-clash-lite <command>
-  run             run mihomo with transparent takeover (foreground, used by procd)
-  add <url>       download a subscription; it becomes active if none is
-  update [id]     re-download the active (or the given) subscription
-  use <id>        make a subscription active (restart the service to apply)
-  list            list subscriptions
-  status          show whether mihomo is up
+  run              run mihomo with transparent takeover (foreground, used by procd)
+  add <url>        download a subscription; it becomes active if none is
+  update [id]      re-download the active (or the given) subscription
+  use <id>         make a subscription active (restart the service to apply)
+  remove <id>      delete a subscription
+  list [--json]    list subscriptions
+  status [--json]  show whether mihomo is up
+  update-core      install the latest mihomo release for this CPU
   version";
 
 fn new_id() -> String {
@@ -38,15 +43,11 @@ fn store(paths: &Paths, state: &mut State, id: &str, url: &str, fetched: &Fetche
     fs::create_dir_all(paths.profiles_dir())?;
     fs::write(paths.profile(id), &fetched.body)?;
     match state.profiles.iter_mut().find(|p| p.id == id) {
-        Some(p) => {
-            p.name = fetched.name.clone();
-            p.updated = now_secs();
-        }
+        Some(p) => p.name = fetched.name.clone(),
         None => state.profiles.push(Profile {
             id: id.to_string(),
             name: fetched.name.clone(),
             url: url.to_string(),
-            updated: now_secs(),
         }),
     }
     state.active.get_or_insert_with(|| id.to_string());
@@ -66,19 +67,21 @@ fn cmd_add(paths: &Paths, url: &str) -> Res<()> {
     Ok(())
 }
 
+fn find<'a>(state: &'a State, id: &str) -> Res<&'a Profile> {
+    Ok(state
+        .profiles
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or(format!("unknown subscription {id}"))?)
+}
+
 fn cmd_update(paths: &Paths, id: Option<&str>) -> Res<()> {
     let mut state = State::load(paths)?;
     let id = id
         .map(str::to_string)
         .or_else(|| state.active.clone())
         .ok_or("no subscription yet")?;
-    let url = state
-        .profiles
-        .iter()
-        .find(|p| p.id == id)
-        .ok_or(format!("unknown subscription {id}"))?
-        .url
-        .clone();
+    let url = find(&state, &id)?.url.clone();
     store(paths, &mut state, &id, &url, &subscription::fetch(&url)?)?;
     println!("updated {id}; restart the service to apply");
     Ok(())
@@ -86,17 +89,48 @@ fn cmd_update(paths: &Paths, id: Option<&str>) -> Res<()> {
 
 fn cmd_use(paths: &Paths, id: &str) -> Res<()> {
     let mut state = State::load(paths)?;
-    if !state.profiles.iter().any(|p| p.id == id) {
-        return Err(format!("unknown subscription {id}").into());
-    }
+    find(&state, id)?;
     state.active = Some(id.to_string());
     state.save(paths)?;
     println!("{id} is now active; restart the service to apply");
     Ok(())
 }
 
-fn cmd_list(paths: &Paths) -> Res<()> {
+/// Removing the active subscription activates the first remaining one, if any.
+fn cmd_remove(paths: &Paths, id: &str) -> Res<()> {
+    let mut state = State::load(paths)?;
+    find(&state, id)?;
+    state.profiles.retain(|p| p.id != id);
+    if state.active.as_deref() == Some(id) {
+        state.active = state.profiles.first().map(|p| p.id.clone());
+    }
+    state.save(paths)?;
+    let _ = fs::remove_file(paths.profile(id));
+    println!("removed {id}");
+    Ok(())
+}
+
+fn list_json(paths: &Paths, state: &State) -> Value {
+    let items: Vec<Value> = state
+        .profiles
+        .iter()
+        .map(|p| {
+            json!({
+                "id": p.id, "name": p.name, "url": p.url,
+                "updated": paths.profile_updated(&p.id),
+                "active": state.active.as_deref() == Some(p.id.as_str()),
+            })
+        })
+        .collect();
+    Value::Array(items)
+}
+
+fn cmd_list(paths: &Paths, as_json: bool) -> Res<()> {
     let state = State::load(paths)?;
+    if as_json {
+        println!("{}", list_json(paths, &state));
+        return Ok(());
+    }
     for p in &state.profiles {
         let mark = if state.active.as_deref() == Some(p.id.as_str()) {
             '*'
@@ -108,21 +142,45 @@ fn cmd_list(paths: &Paths) -> Res<()> {
     Ok(())
 }
 
-fn cmd_status(paths: &Paths) -> Res<()> {
+fn status_json(paths: &Paths, state: &State) -> Value {
+    let (ctl, secret) = (state.controller(), state.secret.as_str());
+    let version = api::version(&ctl, secret).ok();
+    let pid = fs::read_to_string(paths.pid_file()).ok();
+    let memory_kb = pid.and_then(|p| sys::rss_kb(p.trim().parse().ok()?));
+    json!({
+        "running": version.is_some(),
+        "version": version,
+        "tun": version.is_some() && api::tun_enabled(&ctl, secret).unwrap_or(false),
+        "memory_kb": memory_kb,
+        "port": state.port,
+        "secret": state.secret,
+        "active": state.active_profile().map(|p| json!({"id": p.id, "name": p.name})),
+        "core": paths.mihomo_bin(),
+    })
+}
+
+fn cmd_status(paths: &Paths, as_json: bool) -> Res<()> {
     let state = State::load(paths)?;
-    match api::version(&state.controller, &state.secret) {
-        Ok(v) => {
-            let tun = api::tun_enabled(&state.controller, &state.secret).unwrap_or(false);
-            println!(
-                "running: mihomo {v}, tun {}",
-                if tun { "on" } else { "off" }
-            );
-        }
-        Err(_) => println!(
+    let s = status_json(paths, &state);
+    if as_json {
+        println!("{s}");
+    } else if let Some(v) = s["version"].as_str() {
+        let tun = if s["tun"] == true { "on" } else { "off" };
+        println!("running: mihomo {v}, tun {tun}");
+    } else {
+        println!(
             "not running (controller {} does not answer)",
-            state.controller
-        ),
+            state.controller()
+        );
     }
+    Ok(())
+}
+
+fn cmd_update_core(paths: &Paths) -> Res<()> {
+    println!(
+        "installed {}; restart the service to use it",
+        mihomo::update(paths)?
+    );
     Ok(())
 }
 
@@ -133,13 +191,16 @@ fn cmd_version() -> Res<()> {
 
 fn dispatch(args: &[String], paths: &Paths) -> Res<()> {
     let arg = |i: usize| args.get(i).map(String::as_str);
+    let json = arg(1) == Some("--json");
     match arg(0) {
         Some("run") => supervisor::run(paths),
         Some("add") => cmd_add(paths, arg(1).ok_or("usage: add <url>")?),
         Some("update") => cmd_update(paths, arg(1)),
         Some("use") => cmd_use(paths, arg(1).ok_or("usage: use <id>")?),
-        Some("list") => cmd_list(paths),
-        Some("status") => cmd_status(paths),
+        Some("remove") => cmd_remove(paths, arg(1).ok_or("usage: remove <id>")?),
+        Some("list") => cmd_list(paths, json),
+        Some("status") => cmd_status(paths, json),
+        Some("update-core") => cmd_update_core(paths),
         Some("version") => cmd_version(),
         _ => Err(USAGE.into()),
     }
@@ -162,10 +223,11 @@ mod tests {
 
     fn temp_paths(tag: &str) -> Paths {
         let base = std::env::temp_dir().join(format!("oclite-main-{tag}-{}", std::process::id()));
-        Paths {
-            dir: base.join("etc"),
-            run_dir: base.join("run"),
-        }
+        Paths::under(&base)
+    }
+
+    fn cleanup(paths: &Paths) {
+        let _ = fs::remove_dir_all(paths.dir.parent().unwrap());
     }
 
     fn fetched(name: &str) -> Fetched {
@@ -175,20 +237,29 @@ mod tests {
         }
     }
 
+    fn two_profiles(paths: &Paths) -> State {
+        let mut state = State::load(paths).unwrap();
+        store(paths, &mut state, "R1", "http://a", &fetched("A")).unwrap();
+        store(paths, &mut state, "R2", "http://b", &fetched("B")).unwrap();
+        state
+    }
+
     #[test]
     fn the_first_subscription_becomes_active_and_the_second_does_not_steal_it() {
         let paths = temp_paths("store");
-        let mut state = State::load(&paths).unwrap();
-        store(&paths, &mut state, "R1", "http://a", &fetched("A")).unwrap();
-        store(&paths, &mut state, "R2", "http://b", &fetched("B")).unwrap();
+        let state = two_profiles(&paths);
         assert_eq!(state.active.as_deref(), Some("R1"));
-        assert_eq!(state.profiles.len(), 2);
+        assert_eq!(
+            State::load(&paths).unwrap().profiles.len(),
+            2,
+            "saved to UCI"
+        );
         assert!(
             fs::read_to_string(paths.profile("R2"))
                 .unwrap()
                 .contains("# B")
         );
-        let _ = fs::remove_dir_all(paths.dir.parent().unwrap());
+        cleanup(&paths);
     }
 
     #[test]
@@ -204,25 +275,63 @@ mod tests {
                 .unwrap()
                 .contains("# new")
         );
-        let _ = fs::remove_dir_all(paths.dir.parent().unwrap());
+        cleanup(&paths);
     }
 
     #[test]
     fn use_rejects_an_unknown_subscription_and_accepts_a_known_one() {
         let paths = temp_paths("use");
-        let mut state = State::load(&paths).unwrap();
-        store(&paths, &mut state, "R1", "http://a", &fetched("A")).unwrap();
-        store(&paths, &mut state, "R2", "http://b", &fetched("B")).unwrap();
+        two_profiles(&paths);
         assert!(cmd_use(&paths, "nope").is_err());
         cmd_use(&paths, "R2").unwrap();
         assert_eq!(State::load(&paths).unwrap().active.as_deref(), Some("R2"));
-        let _ = fs::remove_dir_all(paths.dir.parent().unwrap());
+        cleanup(&paths);
+    }
+
+    #[test]
+    fn removing_the_active_subscription_activates_the_next_and_deletes_the_file() {
+        let paths = temp_paths("remove");
+        two_profiles(&paths);
+        assert!(cmd_remove(&paths, "nope").is_err());
+        cmd_remove(&paths, "R1").unwrap();
+        let state = State::load(&paths).unwrap();
+        assert_eq!(state.active.as_deref(), Some("R2"));
+        assert_eq!(state.profiles.len(), 1);
+        assert!(!paths.profile("R1").exists());
+        cmd_remove(&paths, "R2").unwrap();
+        assert_eq!(State::load(&paths).unwrap().active, None);
+        cleanup(&paths);
+    }
+
+    #[test]
+    fn list_json_marks_the_active_one_and_carries_the_download_time() {
+        let paths = temp_paths("listjson");
+        let state = two_profiles(&paths);
+        let list = list_json(&paths, &state);
+        assert_eq!(list[0]["id"], "R1");
+        assert_eq!(list[0]["active"], true);
+        assert_eq!(list[1]["active"], false);
+        assert!(list[1]["updated"].as_u64().unwrap() > 1_700_000_000);
+        cleanup(&paths);
+    }
+
+    #[test]
+    fn status_json_reports_not_running_when_nothing_listens() {
+        let paths = temp_paths("statusjson");
+        let mut state = two_profiles(&paths);
+        state.port = 1; // nothing listens on port 1
+        let s = status_json(&paths, &state);
+        assert_eq!(s["running"], false);
+        assert_eq!(s["tun"], false);
+        assert_eq!(s["port"], 1);
+        assert_eq!(s["active"]["name"], "A");
+        cleanup(&paths);
     }
 
     #[test]
     fn unknown_commands_print_the_usage() {
         let paths = temp_paths("usage");
         let err = dispatch(&["bogus".into()], &paths).unwrap_err().to_string();
-        assert!(err.contains("run") && err.contains("add <url>"));
+        assert!(err.contains("run") && err.contains("remove <id>") && err.contains("update-core"));
     }
 }

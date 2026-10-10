@@ -413,6 +413,7 @@ name = "openwrt-clash-lite"
 version = "0.1.0"
 dependencies = [
  "ctrlc",
+ "flate2",
  "libc",
  "serde",
  "serde_json",

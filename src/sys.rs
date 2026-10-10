@@ -67,6 +67,14 @@ mod imp {
     pub fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
         std::os::unix::fs::symlink(src, dst)
     }
+
+    pub fn make_executable(path: &Path) -> std::io::Result<()> {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+    }
+
+    pub fn rss_kb(pid: u32) -> Option<u64> {
+        super::parse_rss(&fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -82,10 +90,41 @@ mod imp {
     pub fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
         std::fs::copy(src, dst).map(|_| ())
     }
+    pub fn make_executable(_path: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
+    pub fn rss_kb(_pid: u32) -> Option<u64> {
+        None
+    }
 }
 
-pub use imp::{die_with_parent, link_file, list_procs, restrict_file, terminate};
+pub use imp::{
+    die_with_parent, link_file, list_procs, make_executable, restrict_file, rss_kb, terminate,
+};
+
+/// Resident memory in kB from the text of `/proc/<pid>/status` (`VmRSS:   12345 kB`).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_rss(status: &str) -> Option<u64> {
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
+}
 
 pub fn file_exists(path: &str) -> bool {
     Path::new(path).exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rss_is_read_from_the_vmrss_line() {
+        let status = "Name:\tclash_meta\nVmPeak:\t  900000 kB\nVmRSS:\t   41236 kB\nThreads:\t9\n";
+        assert_eq!(parse_rss(status), Some(41236));
+        assert_eq!(
+            parse_rss("Name:\tkthreadd\n"),
+            None,
+            "kernel threads have no VmRSS"
+        );
+    }
 }
