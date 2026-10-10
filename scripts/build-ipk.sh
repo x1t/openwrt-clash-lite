@@ -64,6 +64,8 @@ core_package() {
 	install -Dm644 "$ROOT/files/oclite.uc" "$d/data/usr/share/rpcd/ucode/oclite"
 	mkdir -p "$d/data/usr/share/openwrt-clash-lite/ui"
 	unzip -q "$ROOT/assets/yacd.zip" -d "$d/data/usr/share/openwrt-clash-lite/ui" -x CNAME _headers
+	# zip entries may carry 0666; nothing under /usr/share should be world-writable
+	chmod -R u=rwX,go=rX "$d/data/usr/share/openwrt-clash-lite/ui"
 	for arch in $ARCHS; do
 		control "$d" openwrt-clash-lite "$arch" "kmod-tun, kmod-nft-nat, rpcd-mod-ucode, ucode-mod-fs" \
 			"Lightweight mihomo transparent proxy (TUN takeover) with subscriptions"

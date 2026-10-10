@@ -180,7 +180,7 @@ openwrt-clash-lite update-core      更新 mihomo
 cargo test
 cargo zigbuild --release --target armv7-unknown-linux-musleabihf
 cargo zigbuild --release --target aarch64-unknown-linux-musl
-bash scripts/build-ipk.sh 0.1.3 armv7 target/armv7-unknown-linux-musleabihf/release/openwrt-clash-lite dist
+bash scripts/build-ipk.sh 0.1.4 armv7 target/armv7-unknown-linux-musleabihf/release/openwrt-clash-lite dist
 ```
 
 `build-ipk.sh` 要在 Linux（或 WSL）上运行，Windows 文件系统存不了可执行权限。推送 `v*` 标签后，GitHub Actions 会自动编译并发布全部 ipk。
