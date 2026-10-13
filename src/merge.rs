@@ -118,6 +118,8 @@ fn header(o: &Overrides) -> String {
     }
     // Starts off: mihomo drops all connections until its providers load, so the supervisor
     // switches the TUN on afterwards instead of cutting the LAN for that time.
+    // uid 65534 (nobody) bypasses the TUN, so router-side jobs can go direct as they could with
+    // OpenClash (which skips gid 65534; mihomo can only match uids).
     h.push_str(
         "tun:
   enable: false
@@ -126,6 +128,8 @@ fn header(o: &Overrides) -> String {
   auto-route: true
   auto-redirect: true
   auto-detect-interface: true
+  exclude-uid:
+    - 65534
   dns-hijack:
     - any:53
 ",
@@ -299,6 +303,9 @@ mod tests {
             "any:53",
             "external-ui: /etc/x/ui",
             "device: lite0",
+            "exclude-uid:
+    - 65534
+",
         ] {
             assert!(out.contains(want), "missing {want}");
         }

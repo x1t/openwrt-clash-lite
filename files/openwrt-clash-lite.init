@@ -17,6 +17,9 @@ start_service() {
 	procd_set_param respawn 3600 5 5
 	# the daemon waits up to 10 s for mihomo to remove its routes and firewall rules
 	procd_set_param term_timeout 20
+	# every proxied connection is a socket in mihomo; the default 4096 runs out under bursts
+	# (e.g. a speed test opening hundreds of connections) and then DNS fails too. Same as OpenClash.
+	procd_set_param limits nofile="1000000 1000000"
 	procd_close_instance
 }
 

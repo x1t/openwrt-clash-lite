@@ -30,6 +30,7 @@ Clash Lite 让 mihomo 自己用 **TUN 的 `auto-route` + `auto-redirect`** 接�
 ## 📦 功能
 
 - 🛡️ **TUN 透明代理**：局域网设备和路由器自己的流量都接管，DNS 由 mihomo 劫持（只用 redir-host，不用 fake-ip）
+- 🚪 **路由器上的直连任务**：以 uid 65534（nobody）运行的程序不经过 TUN，例如测速脚本里 `python3 -c 'import os,sys; os.setgid(65534); os.setuid(65534); os.execv(sys.argv[1], sys.argv[1:])' ./程序 参数…`（OpenClash 是按 gid 65534 放行，mihomo 只能按 uid）
 - 🚦 **启动不断网**：规则集加载完才打开 TUN，加载期间局域网照常直连；停止或崩溃时 mihomo 自己清掉路由和防火墙规则
 - 🔁 **自动恢复**：mihomo 崩溃后按 2、4、8…30 秒退避重启；守护进程被杀，mihomo 也会跟着退出并清理
 - 🔗 **订阅**：添加、编辑（名称、链接、User-Agent）、更新、切换、删除；User-Agent 默认 `xctcc`，每个订阅可以单独设置
